@@ -1,0 +1,13 @@
+node_modules/
+target/
+dist/
+coverage/
+*.node
+.env
+.env.local
+.DS_Store
+*.log
+.turbo/
+wasm/*.js
+wasm/*.wasm
+wasm/*_bg.*
