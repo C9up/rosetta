@@ -7,7 +7,7 @@ import RosettaProvider, {
 	type RosettaAppContext,
 	type RosettaProviderConfig,
 } from "../../src/RosettaProvider.js";
-import { _getI18n } from "../../src/services/main.js";
+import { getI18n } from "../../src/services/main.js";
 
 function buildApp(i18nConfig?: RosettaProviderConfig): RosettaAppContext {
 	const bindings = new Map<unknown, () => unknown>();
@@ -53,7 +53,7 @@ describe("rosetta > RosettaProvider", () => {
 		await provider.boot();
 
 		const instance = app.container.resolve<Rosetta>(Rosetta);
-		expect(_getI18n()).toBe(instance);
+		expect(getI18n()).toBe(instance);
 	});
 
 	it("tolerates a missing i18n config block (empty options)", () => {

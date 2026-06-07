@@ -1,26 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { Rosetta } from "../../src/Rosetta.js";
-import i18n, { _getI18n, _setI18n } from "../../src/services/main.js";
+import i18n, { getI18n, setI18n } from "../../src/services/main.js";
 
 describe("rosetta > services/main singleton", () => {
-	it("throws when the proxy is accessed before _setI18n binds an instance", () => {
+	it("throws when the proxy is accessed before setI18n binds an instance", () => {
 		// Module-level state: if a prior test in this file already bound an
 		// instance the throw won't fire, so this case runs FIRST and the
-		// _setI18n tests follow.
-		expect(_getI18n()).toBeUndefined();
+		// setI18n tests follow.
+		expect(getI18n()).toBeUndefined();
 		expect(() => i18n.locale("en")).toThrow(/accessed before/);
 	});
 
-	it("_getI18n returns undefined pre-boot", () => {
+	it("getI18n returns undefined pre-boot", () => {
 		// Still unbound at this point (the throw test above didn't bind).
-		expect(_getI18n()).toBeUndefined();
+		expect(getI18n()).toBeUndefined();
 	});
 
-	it("_setI18n binds the instance and the proxy delegates to it", () => {
+	it("setI18n binds the instance and the proxy delegates to it", () => {
 		const rosetta = new Rosetta({ defaultLocale: "en" });
-		_setI18n(rosetta);
+		setI18n(rosetta);
 
-		expect(_getI18n()).toBe(rosetta);
+		expect(getI18n()).toBe(rosetta);
 		// Proxy now resolves real methods bound to the instance.
 		const locale = i18n.locale("en");
 		expect(locale).toBeDefined();
@@ -32,7 +32,7 @@ describe("rosetta > services/main singleton", () => {
 			defaultLocale: "en",
 			messages: { en: { greeting: "Hello" } },
 		});
-		_setI18n(rosetta);
+		setI18n(rosetta);
 
 		// Destructure a method off the proxy — the bind() in the getter
 		// must keep it pointed at the real instance.

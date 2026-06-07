@@ -8,34 +8,34 @@
  *   locale.t('greeting', { name: user.name })
  *
  * Populated by `RosettaProvider.boot()` or by the app directly through
- * `_setI18n(myRosetta)` when the i18n config has to be built outside
+ * `setI18n(myRosetta)` when the i18n config has to be built outside
  * the provider flow.
  */
 
 import type { Rosetta } from "../Rosetta.js";
 
-let _instance: Rosetta | undefined;
+let instance: Rosetta | undefined;
 
 /** @internal Bind the singleton (called by RosettaProvider or the app). */
-export function _setI18n(instance: Rosetta): void {
-	_instance = instance;
+export function setI18n(value: Rosetta): void {
+	instance = value;
 }
 
 /** @internal Read the singleton (or `undefined` pre-boot). */
-export function _getI18n(): Rosetta | undefined {
-	return _instance;
+export function getI18n(): Rosetta | undefined {
+	return instance;
 }
 
 const i18n: Rosetta = new Proxy({} as Rosetta, {
 	get(_target, prop) {
-		if (!_instance) {
+		if (!instance) {
 			throw new Error(
 				"[rosetta] Rosetta singleton accessed before RosettaProvider.boot() ran " +
-					"or `_setI18n(myRosetta)` was called. Wire one of them first.",
+					"or `setI18n(myRosetta)` was called. Wire one of them first.",
 			);
 		}
-		const value = Reflect.get(_instance, prop, _instance);
-		return typeof value === "function" ? value.bind(_instance) : value;
+		const value = Reflect.get(instance, prop, instance);
+		return typeof value === "function" ? value.bind(instance) : value;
 	},
 });
 

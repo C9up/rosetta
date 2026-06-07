@@ -1,6 +1,6 @@
 import { FileSystemLoader } from "./loaders/FileSystemLoader.js";
 import { Rosetta, type RosettaOptions } from "./Rosetta.js";
-import { _setI18n } from "./services/main.js";
+import { setI18n } from "./services/main.js";
 
 /**
  * Duck-typed host context — rosetta stays publishable without
@@ -70,7 +70,7 @@ export default class RosettaProvider {
 	async boot(): Promise<void> {
 		const rosetta = this.app.container.resolve<Rosetta>(Rosetta);
 		await rosetta.boot();
-		_setI18n(rosetta);
+		setI18n(rosetta);
 	}
 
 	async shutdown(): Promise<void> {}
