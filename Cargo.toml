@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/rosetta-engine",
+  "crates/rosetta-engine-napi",
+  "crates/rosetta-engine-wasm",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/C9up/rosetta"
