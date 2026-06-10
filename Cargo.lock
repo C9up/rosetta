@@ -289,7 +289,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rosetta-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "serde",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-engine-napi"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "napi",
  "napi-build",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "rosetta-engine-wasm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "rosetta-engine",
  "serde_json",
