@@ -287,7 +287,15 @@ export class Rosetta {
 			);
 		}
 		this.#syncNativeEngine();
-		const paramsJson = params ? JSON.stringify(params) : undefined;
+		// `bigint` makes a plain `JSON.stringify` THROW, crashing `t()` — serialise
+		// it as its decimal string so it survives the boundary and renders/pluralises
+		// correctly (RO7). `Date` already serialises to an ISO string via `toJSON`,
+		// which the engine's date/time formatter now slices.
+		const paramsJson = params
+			? JSON.stringify(params, (_k, v) =>
+					typeof v === "bigint" ? v.toString() : v,
+				)
+			: undefined;
 		return this.#nativeEngine.translate(
 			key,
 			paramsJson,

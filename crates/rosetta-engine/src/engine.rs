@@ -44,7 +44,10 @@ pub fn translate(
 
 /// Top-level entry point for formatting a single message string.
 pub fn format_message(message: &str, params: Option<&HashMap<String, Value>>, locale: &str) -> String {
-    if !message.contains('{') {
+    // Fast path only when there's neither a placeholder NOR an apostrophe — the
+    // latter still needs ICU quote decoding (`''` → `'`, `'{'` → `{`), even with
+    // no `{` in the message (RO2).
+    if !message.contains('{') && !message.contains('\'') {
         return message.to_string();
     }
     format_segment(message, params, locale)
@@ -54,29 +57,67 @@ fn format_segment(segment: &str, params: Option<&HashMap<String, Value>>, locale
     let mut out = String::with_capacity(segment.len());
     let mut i = 0;
 
-    // Iterate by byte index but always push full UTF-8 chars. We use byte
-    // indexing for brace matching ('{' and '}' are single-byte ASCII) and
-    // slice the original &str for everything else — never `byte as char`.
     while i < segment.len() {
-        if segment.as_bytes()[i] != b'{' {
-            // Find the next '{' or end-of-string, push the whole slice at once.
-            let next = segment[i..].find('{').map(|p| i + p).unwrap_or(segment.len());
-            out.push_str(&segment[i..next]);
-            i = next;
-            continue;
+        let c = segment[i..].chars().next().unwrap();
+        match c {
+            // ICU apostrophe quoting (RO2): `''` → literal `'`; `'` before a
+            // syntax char (`{ } #`) opens a quoted span copied verbatim until the
+            // next single `'`; a lone `'` is a literal apostrophe.
+            '\'' => i = consume_quote(segment, i, &mut out),
+            '{' => {
+                let end = find_matching_brace(segment, i);
+                if end == usize::MAX {
+                    out.push_str(&segment[i..]);
+                    break;
+                }
+                let content = segment[i + 1..end].trim();
+                out.push_str(&resolve_token(content, params, locale));
+                i = end + 1;
+            }
+            _ => {
+                out.push(c);
+                i += c.len_utf8();
+            }
         }
-
-        let end = find_matching_brace(segment, i);
-        if end == usize::MAX {
-            out.push_str(&segment[i..]);
-            break;
-        }
-
-        let content = segment[i + 1..end].trim();
-        out.push_str(&resolve_token(content, params, locale));
-        i = end + 1;
     }
     out
+}
+
+/// Handle ICU quoting starting at the `'` at byte index `i`. Pushes the decoded
+/// literal text to `out` and returns the byte index just past the consumed quote
+/// construct.
+fn consume_quote(segment: &str, i: usize, out: &mut String) -> usize {
+    let rest = &segment[i + 1..];
+    match rest.chars().next() {
+        Some('\'') => {
+            out.push('\''); // `''` → literal `'`
+            i + 2
+        }
+        Some('{') | Some('}') | Some('#') => {
+            // Quoted span: copy literally until the next single `'` (with `''`
+            // inside the span meaning a literal `'`).
+            let mut j = i + 1;
+            while j < segment.len() {
+                let cc = segment[j..].chars().next().unwrap();
+                if cc == '\'' {
+                    if segment[j + 1..].chars().next() == Some('\'') {
+                        out.push('\'');
+                        j += 2;
+                    } else {
+                        return j + 1; // closing quote
+                    }
+                } else {
+                    out.push(cc);
+                    j += cc.len_utf8();
+                }
+            }
+            j // unterminated quote → consumed to end
+        }
+        _ => {
+            out.push('\''); // lone apostrophe → literal
+            i + 1
+        }
+    }
 }
 
 fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale: &str) -> String {
@@ -90,15 +131,25 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
 
     let var_name = parts[0].trim();
     let kind = parts[1].trim();
-    // Everything after the type keyword (for option parsing).
-    let options_start = content.find(kind).unwrap_or(0) + kind.len();
-    let options_raw = if options_start < content.len() {
-        content[options_start..].trim_start_matches(',').trim()
+    // Options = everything after the 2nd top-level comma. Use the already-split
+    // `parts` (split_top_level skips commas nested in `{}`) rather than
+    // `content.find(kind)`, which mis-targeted when the kind keyword reappeared in
+    // an option body, e.g. `{x, select, other {pick select}}` (RO4).
+    let options_owned: String = if parts.len() > 2 {
+        parts[2..].join(", ")
     } else {
-        ""
+        String::new()
     };
+    let options_raw = options_owned.as_str();
 
     let raw_value = params.and_then(|p| p.get(var_name));
+    // A param NOT provided at all (distinct from an explicit `null`) leaves the
+    // whole token intact, matching the simple-placeholder policy — a forgotten
+    // `{n, plural, …}` / `{g, select, …}` stays visible instead of silently
+    // defaulting to 0 / "other" / empty (RO1).
+    if raw_value.is_none() {
+        return format!("{{{content}}}");
+    }
 
     match kind {
         "select" => {
@@ -124,7 +175,7 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
             // Exact match first: `=0`, `=1`, `=5`
             let exact_key = format!("={}", n as i64);
             if let Some(msg) = options.get(exact_key.as_str()) {
-                let replaced = msg.replace('#', &format_number(adjusted));
+                let replaced = replace_hash_top_level(msg, &format_number(adjusted));
                 return format_segment(&replaced, params, locale);
             }
 
@@ -135,7 +186,7 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
                 .or_else(|| options.get("other"))
                 .cloned()
                 .unwrap_or_default();
-            let replaced = selected.replace('#', &format_number(adjusted));
+            let replaced = replace_hash_top_level(&selected, &format_number(adjusted));
             format_segment(&replaced, params, locale)
         }
 
@@ -148,27 +199,22 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
         "date" | "time" => {
             // Simplified: render as ISO substring. Full locale-aware formatting
             // would require ICU4X (~2MB binary). ISO is correct and consistent.
-            let s = match raw_value {
-                Some(Value::String(s)) => s.clone(),
-                Some(Value::Number(n)) => {
-                    if let Some(ms) = n.as_f64() {
-                        // Epoch millis → ISO
-                        let secs = (ms / 1000.0) as i64;
-                        let naive = chrono::DateTime::from_timestamp(secs, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default();
-                        if kind == "date" {
-                            naive.get(..10).unwrap_or(&naive).to_string()
-                        } else {
-                            naive.get(11..19).unwrap_or(&naive).to_string()
-                        }
-                    } else {
-                        String::new()
-                    }
-                }
-                _ => String::new(),
+            // Resolve an ISO string from EITHER a string (e.g. a JS `Date`, which
+            // `JSON.stringify` serialises to ISO — RO7) OR epoch-millis number,
+            // then slice the date/time portion in both cases.
+            let iso = match raw_value {
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Number(n)) => n.as_f64().and_then(|ms| {
+                    chrono::DateTime::from_timestamp((ms / 1000.0) as i64, 0)
+                        .map(|dt| dt.to_rfc3339())
+                }),
+                _ => None,
             };
-            s
+            match iso {
+                Some(s) if kind == "date" => s.get(..10).unwrap_or(&s).to_string(),
+                Some(s) => s.get(11..19).unwrap_or(&s).to_string(),
+                None => String::new(),
+            }
         }
 
         _ => param_to_string(params, var_name),
@@ -180,9 +226,14 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
 fn param_to_string(params: Option<&HashMap<String, Value>>, key: &str) -> String {
     match params.and_then(|p| p.get(key)) {
         Some(Value::String(s)) => s.clone(),
+        // An explicit `null` is an intentional blank → empty string.
         Some(Value::Null) => String::new(),
         Some(v) => value_to_string(v),
-        None => String::new(),
+        // Param NOT provided at all: leave the placeholder INTACT (`{key}`) rather
+        // than silently substituting empty. This makes a forgotten param visible
+        // instead of producing "Bienvenue,  !", and lets a second interpolation
+        // phase (server `t()` then client `.replace('{name}', …)`) still fill it.
+        None => format!("{{{key}}}"),
     }
 }
 
@@ -216,6 +267,56 @@ fn format_number(n: f64) -> String {
     }
 }
 
+/// Replace `#` with `replacement`, but ONLY at the top brace level. A `#` inside
+/// a nested `{…}` belongs to an inner plural/sub-message and must keep ITS own
+/// count, not receive this plural's — otherwise nested plurals cross-contaminate
+/// (RO3).
+fn replace_hash_top_level(s: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(s.len() + replacement.len());
+    let mut depth = 0i32;
+    let mut it = s.char_indices().peekable();
+    while let Some((_, ch)) = it.next() {
+        match ch {
+            // Preserve ICU-quoted spans verbatim so a quoted `'#'` stays literal
+            // (format_segment decodes it later) and quoted braces don't shift depth.
+            '\'' => {
+                out.push('\'');
+                match it.peek().map(|(_, c)| *c) {
+                    Some('\'') => {
+                        out.push('\'');
+                        it.next();
+                    }
+                    Some('{') | Some('}') | Some('#') => {
+                        while let Some((_, c)) = it.next() {
+                            out.push(c);
+                            if c == '\'' {
+                                if it.peek().map(|(_, c)| *c) == Some('\'') {
+                                    out.push('\'');
+                                    it.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            '{' => {
+                depth += 1;
+                out.push(ch);
+            }
+            '}' => {
+                depth -= 1;
+                out.push(ch);
+            }
+            '#' if depth == 0 => out.push_str(replacement),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 fn format_number_icu(n: f64, style: &str) -> String {
     match style {
         "" | "decimal" => format_number(n),
@@ -231,39 +332,60 @@ fn format_number_icu(n: f64, style: &str) -> String {
     }
 }
 
-/// Parse `key {value} key2 {value2}` option blocks.
+/// Parse `key {value} key2 {value2}` option blocks. Iterates by char (never
+/// `byte as char`) so non-ASCII option keys/values can't land a slice mid-UTF-8
+/// and panic (RO6).
 fn parse_options(input: &str) -> HashMap<&str, String> {
     let source = input.trim();
     let mut result = HashMap::new();
-    let bytes = source.as_bytes();
-    let mut i = 0;
+    let chars: Vec<(usize, char)> = source.char_indices().collect();
+    let mut idx = 0;
 
-    while i < bytes.len() {
+    while idx < chars.len() {
         // Skip whitespace
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
-        if i >= bytes.len() { break; }
+        while idx < chars.len() && chars[idx].1.is_whitespace() {
+            idx += 1;
+        }
+        if idx >= chars.len() {
+            break;
+        }
 
-        // Skip "offset:N"
-        if source[i..].starts_with("offset") {
-            while i < bytes.len() && bytes[i] != b' ' && bytes[i] != b'{' { i += 1; }
+        let key_start = chars[idx].0;
+
+        // Skip the `offset:N` directive (require the colon so a key literally
+        // named `offset` is NOT swallowed).
+        if source[key_start..].starts_with("offset:") {
+            while idx < chars.len() && !chars[idx].1.is_whitespace() && chars[idx].1 != '{' {
+                idx += 1;
+            }
             continue;
         }
 
-        // Read key
-        let key_start = i;
-        while i < bytes.len() && !(bytes[i] as char).is_whitespace() && bytes[i] != b'{' {
-            i += 1;
+        // Read key: up to the next whitespace or '{'.
+        while idx < chars.len() && !chars[idx].1.is_whitespace() && chars[idx].1 != '{' {
+            idx += 1;
         }
-        let key = &source[key_start..i];
+        let key_end = if idx < chars.len() { chars[idx].0 } else { source.len() };
+        let key = &source[key_start..key_end];
 
-        // Skip whitespace before '{'
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
-        if i >= bytes.len() || bytes[i] != b'{' { continue; }
+        // Skip whitespace before '{'.
+        while idx < chars.len() && chars[idx].1.is_whitespace() {
+            idx += 1;
+        }
+        if idx >= chars.len() || chars[idx].1 != '{' {
+            continue;
+        }
 
-        let end = find_matching_brace(source, i);
-        if end == usize::MAX { break; }
-        result.insert(key, source[i + 1..end].to_string());
-        i = end + 1;
+        let open = chars[idx].0;
+        let end = find_matching_brace(source, open);
+        if end == usize::MAX {
+            break;
+        }
+        result.insert(key, source[open + 1..end].to_string());
+        // Advance the char cursor past the closing brace (a byte index).
+        while idx < chars.len() && chars[idx].0 <= end {
+            idx += 1;
+        }
     }
 
     result
@@ -301,12 +423,37 @@ fn split_top_level(input: &str, sep: char) -> Vec<&str> {
 }
 
 fn find_matching_brace(input: &str, open_index: usize) -> usize {
-    let mut depth = 0;
-    for (i, ch) in input[open_index..].char_indices() {
-        if ch == '{' { depth += 1; }
-        if ch == '}' {
-            depth -= 1;
-            if depth == 0 { return open_index + i; }
+    let mut depth = 0i32;
+    let mut it = input[open_index..].char_indices().peekable();
+    while let Some((i, ch)) = it.next() {
+        match ch {
+            // Skip ICU-quoted spans so a quoted `'{'` / `'}'` doesn't move depth.
+            '\'' => match it.peek().map(|(_, c)| *c) {
+                Some('\'') => {
+                    it.next(); // `''` literal
+                }
+                Some('{') | Some('}') | Some('#') => {
+                    // quoted span until the next single `'`
+                    while let Some((_, c)) = it.next() {
+                        if c == '\'' {
+                            if it.peek().map(|(_, c)| *c) == Some('\'') {
+                                it.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {} // lone `'`
+            },
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return open_index + i;
+                }
+            }
+            _ => {}
         }
     }
     usize::MAX
@@ -332,12 +479,14 @@ fn plural_category(n: f64, locale: &str, ordinal: bool) -> &'static str {
 
     match lang {
         // One = 1 (integer, no visible fraction)
-        "en" | "de" | "nl" | "sv" | "da" | "no" | "nb" | "nn" | "it" | "es" | "pt" | "el"
+        "en" | "de" | "nl" | "sv" | "da" | "no" | "nb" | "nn" | "it" | "es" | "el"
         | "fi" | "he" | "hu" | "tr" | "bg" | "ca" | "et" | "gl" | "hi" | "sw" => {
             if i == 1 && v == 0 { "one" } else { "other" }
         }
-        // French/Brazilian: one = 0 or 1
-        "fr" | "pt-BR" => {
+        // French + Portuguese: one = 0 or 1. (Region is stripped above, so `pt`
+        // covers pt-BR and generic pt — both CLDR `one = 0..1`. RO5: the old
+        // `"pt-BR"` arm was dead code since `lang` never carries a region.)
+        "fr" | "pt" => {
             if i == 0 || i == 1 { "one" } else { "other" }
         }
         // Arabic: zero, one, two, few, many, other
@@ -436,6 +585,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_param_leaves_placeholder_intact() {
+        let catalogs = sample_catalogs();
+        let chain = vec!["en".to_string()];
+        // No params at all → `{name}` is preserved (not replaced with empty), so a
+        // 2nd interpolation phase can fill it and a forgotten param stays visible.
+        assert_eq!(translate(&catalogs, "greet", None, &chain, None), "Hello {name}");
+        // Params present but missing the referenced key → same.
+        let mut other = HashMap::new();
+        other.insert("other".to_string(), Value::String("x".to_string()));
+        assert_eq!(
+            translate(&catalogs, "greet", Some(&other), &chain, None),
+            "Hello {name}"
+        );
+    }
+
+    #[test]
     fn translates_plural_zero() {
         let catalogs = sample_catalogs();
         let chain = vec!["en".to_string()];
@@ -520,5 +685,114 @@ mod tests {
         let catalogs = sample_catalogs();
         assert!(has_key(&catalogs, "greet", &["fr".to_string()]));
         assert!(!has_key(&catalogs, "missing", &["fr".to_string(), "en".to_string()]));
+    }
+
+    // ─── audit regressions (RO1-RO5) ───────────────────────────────────────────
+
+    fn cat(locale: &str, pairs: &[(&str, &str)]) -> Catalogs {
+        let mut c = Catalogs::new();
+        let mut m = HashMap::new();
+        for (k, v) in pairs {
+            m.insert(k.to_string(), v.to_string());
+        }
+        c.insert(locale.to_string(), m);
+        c
+    }
+
+    fn one(k: &str, v: Value) -> HashMap<String, Value> {
+        let mut p = HashMap::new();
+        p.insert(k.to_string(), v);
+        p
+    }
+
+    #[test]
+    fn ro2_icu_escaping() {
+        let c = cat(
+            "en",
+            &[
+                ("lit", "use '{' and '}' literally"),
+                ("apos", "o''clock"),
+                ("mix", "'{'{name}'}'"),
+            ],
+        );
+        let chain = vec!["en".to_string()];
+        assert_eq!(translate(&c, "lit", None, &chain, None), "use { and } literally");
+        assert_eq!(translate(&c, "apos", None, &chain, None), "o'clock");
+        assert_eq!(
+            translate(&c, "mix", Some(&one("name", Value::String("X".into()))), &chain, None),
+            "{X}"
+        );
+    }
+
+    #[test]
+    fn ro1_missing_param_keeps_plural_and_select_intact() {
+        let c = cat(
+            "en",
+            &[
+                ("items", "{count, plural, one {# item} other {# items}}"),
+                ("g", "{gender, select, male {He} other {They}}"),
+            ],
+        );
+        let chain = vec!["en".to_string()];
+        assert_eq!(
+            translate(&c, "items", None, &chain, None),
+            "{count, plural, one {# item} other {# items}}"
+        );
+        assert_eq!(
+            translate(&c, "g", None, &chain, None),
+            "{gender, select, male {He} other {They}}"
+        );
+    }
+
+    #[test]
+    fn ro4_kind_keyword_in_option_body() {
+        let c = cat("en", &[("k", "{x, select, a {pick select here} other {none}}")]);
+        let chain = vec!["en".to_string()];
+        assert_eq!(
+            translate(&c, "k", Some(&one("x", Value::String("a".into()))), &chain, None),
+            "pick select here"
+        );
+    }
+
+    #[test]
+    fn ro3_nested_plural_hash_not_cross_replaced() {
+        let c = cat("en", &[("n", "{a, plural, other {{b, plural, other {#}}}}")]);
+        let chain = vec!["en".to_string()];
+        let mut p = HashMap::new();
+        p.insert("a".to_string(), Value::Number(5.into()));
+        p.insert("b".to_string(), Value::Number(2.into()));
+        // Inner `#` must show the INNER count (2), not the outer (5).
+        assert_eq!(translate(&c, "n", Some(&p), &chain, None), "2");
+    }
+
+    #[test]
+    fn ro7_date_time_slices_iso_string() {
+        let c = cat("en", &[("d", "{when, date}"), ("t", "{when, time}")]);
+        let chain = vec!["en".to_string()];
+        // A JS `Date` serialises to an ISO string via `JSON.stringify`; the engine
+        // must slice the date/time portion, not echo the whole ISO string.
+        let iso = Value::String("2026-06-10T12:34:56.000Z".into());
+        assert_eq!(
+            translate(&c, "d", Some(&one("when", iso.clone())), &chain, None),
+            "2026-06-10"
+        );
+        assert_eq!(
+            translate(&c, "t", Some(&one("when", iso)), &chain, None),
+            "12:34:56"
+        );
+    }
+
+    #[test]
+    fn ro5_portuguese_plural_one_is_zero_or_one() {
+        let c = cat("pt", &[("items", "{count, plural, one {# item} other {# itens}}")]);
+        let chain = vec!["pt".to_string()];
+        assert_eq!(
+            translate(&c, "items", Some(&one("count", Value::Number(0.into()))), &chain, None),
+            "0 item"
+        );
+        assert_eq!(
+            translate(&c, "items", Some(&one("count", Value::Number(2.into()))), &chain, None),
+            "2 itens"
+        );
     }
 }

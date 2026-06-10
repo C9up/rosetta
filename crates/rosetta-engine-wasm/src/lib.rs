@@ -17,7 +17,12 @@ pub fn translate(
     };
     let chain: Vec<String> =
         serde_json::from_str(chain_json).map_err(|e| JsValue::from_str(&format!("Invalid chain: {}", e)))?;
-    Ok(rosetta_engine::translate(&catalogs, key, params.as_ref(), &chain, default_value.as_deref()))
+    // Guard the engine call so an internal panic surfaces as a catchable JS error
+    // instead of trapping the whole wasm module (RO8 — parity with the napi binding).
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rosetta_engine::translate(&catalogs, key, params.as_ref(), &chain, default_value.as_deref())
+    }))
+    .map_err(|_| JsValue::from_str("Internal panic in rosetta engine"))
 }
 
 #[wasm_bindgen]
@@ -26,5 +31,8 @@ pub fn has(catalogs_json: &str, key: &str, chain_json: &str) -> Result<bool, JsV
         serde_json::from_str(catalogs_json).map_err(|e| JsValue::from_str(&format!("Invalid catalogs: {}", e)))?;
     let chain: Vec<String> =
         serde_json::from_str(chain_json).map_err(|e| JsValue::from_str(&format!("Invalid chain: {}", e)))?;
-    Ok(rosetta_engine::has_key(&catalogs, key, &chain))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rosetta_engine::has_key(&catalogs, key, &chain)
+    }))
+    .map_err(|_| JsValue::from_str("Internal panic in rosetta engine"))
 }
