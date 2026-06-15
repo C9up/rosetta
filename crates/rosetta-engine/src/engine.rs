@@ -321,7 +321,13 @@ fn format_number_icu(n: f64, style: &str) -> String {
     match style {
         "" | "decimal" => format_number(n),
         "integer" => format!("{}", n as i64),
-        "percent" => format!("{}%", (n * 100.0).round() as i64),
+        "percent" => {
+            // Preserve fractional precision (0.125 -> "12.5%", not the old
+            // integer-truncated "13%") while killing f64 drift by rounding to 4
+            // decimals (audit 2026-06-13). Full ICU parity needs ICU4X.
+            let pct = ((n * 100.0) * 10_000.0).round() / 10_000.0;
+            format!("{}%", format_number(pct))
+        }
         s if s.starts_with("currency/") => {
             let currency = &s["currency/".len()..];
             // Simplified currency: value + symbol. Full locale-aware formatting
@@ -582,6 +588,16 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("name".to_string(), Value::String("Kaen".to_string()));
         assert_eq!(translate(&catalogs, "greet", Some(&params), &chain, None), "Hello Kaen");
+    }
+
+    #[test]
+    fn percent_preserves_fractional_precision() {
+        // 0.125 must render "12.5%", not the old integer-truncated "13%"
+        // (audit 2026-06-13). Whole percents stay clean; f64 drift is killed.
+        assert_eq!(format_number_icu(0.125, "percent"), "12.5%");
+        assert_eq!(format_number_icu(0.13, "percent"), "13%");
+        assert_eq!(format_number_icu(0.1, "percent"), "10%");
+        assert_eq!(format_number_icu(1.0, "percent"), "100%");
     }
 
     #[test]

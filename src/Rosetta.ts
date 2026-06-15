@@ -1,4 +1,27 @@
-import { createNativeEngine, type NativeRosettaEngine } from "./native.js";
+import {
+	createNativeEngine,
+	getLoadError,
+	type NativeRosettaEngine,
+} from "./native.js";
+
+/**
+ * Build the "engine unavailable" error, surfacing the REAL load failure as the
+ * cause instead of a Node-only "build:napi" message that misleads browser/WASM
+ * users (audit 2026-06-13).
+ */
+function nativeEngineRequiredError(): Error {
+	const loadError = getLoadError();
+	const detail =
+		loadError !== undefined
+			? ` Underlying load failure: ${loadError instanceof Error ? loadError.message : String(loadError)}.`
+			: "";
+	return new Error(
+		"[ROSETTA_NAPI_REQUIRED] The Rosetta ICU engine failed to load. In Node, build the " +
+			"native binary (`cd packages/rosetta && pnpm build:napi`); in the browser, ensure the " +
+			`WASM build is bundled.${detail}`,
+		loadError !== undefined ? { cause: loadError } : undefined,
+	);
+}
 
 export type TranslationParams = Record<
 	string,
@@ -265,9 +288,7 @@ export class Rosetta {
 		const chain = this.#localeChainFor(normalizedLocale);
 
 		if (!this.#nativeEngine) {
-			throw new Error(
-				"[ROSETTA_NAPI_REQUIRED] The Rust ICU engine is required. Build it with `cd packages/rosetta && pnpm build:napi`.",
-			);
+			throw nativeEngineRequiredError();
 		}
 		this.#syncNativeEngine();
 		return this.#nativeEngine.has(key, JSON.stringify(chain));
@@ -282,9 +303,7 @@ export class Rosetta {
 		const chain = this.#localeChainFor(requestedLocale);
 
 		if (!this.#nativeEngine) {
-			throw new Error(
-				"[ROSETTA_NAPI_REQUIRED] The Rust ICU engine is required. Build it with `cd packages/rosetta && pnpm build:napi`.",
-			);
+			throw nativeEngineRequiredError();
 		}
 		this.#syncNativeEngine();
 		// `bigint` makes a plain `JSON.stringify` THROW, crashing `t()` — serialise

@@ -90,6 +90,15 @@ export function isNativeAvailable(): boolean {
 	return native !== undefined || wasmModule !== undefined;
 }
 
+/**
+ * The error captured when neither the NAPI binary nor the WASM module could be
+ * loaded, so callers can surface the REAL cause instead of a generic
+ * "build the native engine" message that misleads browser/WASM users.
+ */
+export function getLoadError(): unknown {
+	return loadError;
+}
+
 /** Create a stateful engine (Node NAPI only). Returns null in browser (WASM is stateless). */
 export function createNativeEngine(): NativeRosettaEngine | null {
 	if (!native) {
@@ -117,7 +126,9 @@ export function createNativeEngine(): NativeRosettaEngine | null {
 	return new native.RosettaEngine();
 }
 
-// Legacy stateless exports (used by tests)
+// Stateless one-shot translate/has exports. Currently unused (no caller in
+// src/ or tests/) — kept as public API. The earlier "used by tests" note was
+// inaccurate.
 export function nativeTranslate(
 	catalogsJson: string,
 	key: string,
