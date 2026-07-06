@@ -36,9 +36,9 @@ describe("rosetta", () => {
 		);
 	});
 
-	it("returns key when translation and defaultValue are missing", () => {
+	it("returns Adonis-format 'translation missing' when key and defaultValue are missing", () => {
 		const i18n = new Rosetta();
-		expect(i18n.t("missing.key")).toBe("missing.key");
+		expect(i18n.t("missing.key")).toBe("translation missing: en, missing.key");
 	});
 
 	it("interpolates placeholders", () => {
@@ -261,5 +261,174 @@ describe("rosetta", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("rosetta — adonis i18n parity", () => {
+	// Gap 1 — missing translation notification
+	it("notifies onMissingTranslation when a key is missing everywhere", () => {
+		const events: Array<{
+			locale: string;
+			identifier: string;
+			hasFallback: boolean;
+		}> = [];
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			onMissingTranslation: (payload) => events.push(payload),
+		}).loadMessages("en", { hello: "Hello" });
+
+		i18n.t("nope");
+		expect(events).toEqual([
+			{ locale: "en", identifier: "nope", hasFallback: false },
+		]);
+	});
+
+	it("notifies onMissingTranslation with hasFallback when resolved via fallback", () => {
+		const events: Array<{ identifier: string; hasFallback: boolean }> = [];
+		const i18n = new Rosetta({
+			defaultLocale: "fr",
+			fallbackLocale: "en",
+			onMissingTranslation: (payload) =>
+				events.push({
+					identifier: payload.identifier,
+					hasFallback: payload.hasFallback,
+				}),
+		})
+			.loadMessages("en", { hello: "Hello" })
+			.loadMessages("fr", {});
+
+		expect(i18n.t("hello")).toBe("Hello");
+		expect(events).toEqual([{ identifier: "hello", hasFallback: true }]);
+	});
+
+	it("does not notify when resolved in the primary locale", () => {
+		let called = false;
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			onMissingTranslation: () => {
+				called = true;
+			},
+		}).loadMessages("en", { hello: "Hello" });
+
+		i18n.t("hello");
+		expect(called).toBe(false);
+	});
+
+	// Gap 2 — configurable fallback for a missing key
+	it("uses the configured fallback function for a missing key", () => {
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			fallback: (identifier, locale) => `[${locale}:${identifier}]`,
+		});
+		expect(i18n.t("missing.key")).toBe("[en:missing.key]");
+	});
+
+	it("inline defaultValue wins over the configured fallback", () => {
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			fallback: () => "GLOBAL",
+		});
+		expect(i18n.t("missing.key", undefined, { defaultValue: "N/A" })).toBe(
+			"N/A",
+		);
+	});
+
+	// Gap 3 — new Intl-only formatters
+	it("formatTime formats a time value", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		const out = i18n.formatTime(new Date("2026-01-01T14:30:00Z"), {
+			timeStyle: "short",
+			timeZone: "UTC",
+		});
+		expect(out).toMatch(/2:30/);
+	});
+
+	it("formatPlural returns the CLDR category", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		expect(i18n.formatPlural(1)).toBe("one");
+		expect(i18n.formatPlural(2)).toBe("other");
+	});
+
+	it("formatList joins a list", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		expect(i18n.formatList(["a", "b", "c"])).toBe("a, b, and c");
+	});
+
+	it("formatDisplayNames resolves a region name", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		expect(i18n.formatDisplayNames("US", { type: "region" })).toBe(
+			"United States",
+		);
+	});
+
+	// Gap 4 — currency options-bag + legacy alias
+	it("formatCurrency accepts the Adonis options bag", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		expect(i18n.formatCurrency(1234.5, { currency: "USD" })).toContain("$");
+	});
+
+	it("formatCurrency keeps the legacy (value, currency) form", () => {
+		const i18n = new Rosetta({ defaultLocale: "fr" });
+		expect(i18n.formatCurrency(1234.5, "EUR")).toContain("€");
+	});
+
+	// Gap 5 — relative time from Date/string + auto unit
+	it("formatRelativeTime accepts a Date with auto unit", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		const past = new Date(Date.now() - 2 * 60 * 60 * 1000);
+		expect(i18n.formatRelativeTime(past, "auto")).toContain("hours ago");
+	});
+
+	it("formatRelativeTime accepts an ISO string with a fixed unit", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		const future = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+		expect(i18n.formatRelativeTime(future, "day")).toContain("in");
+	});
+
+	// Gap 7 — getSupportedLocaleFor alias
+	it("getSupportedLocaleFor resolves like resolveLocale", () => {
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			supportedLocales: ["en", "fr", "de"],
+		});
+		expect(i18n.getSupportedLocaleFor("fr-CH,fr;q=0.9")).toBe("fr");
+		expect(i18n.getSupportedLocaleFor(["de", "fr"])).toBe("de");
+	});
+
+	// Gap 8 — locale getter + immutable switchLocale on the request instance
+	it("RosettaLocale exposes a locale getter and immutable switchLocale", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" })
+			.loadMessages("en", { greeting: "Hello" })
+			.loadMessages("fr", { greeting: "Bonjour" });
+
+		const en = i18n.locale("en");
+		expect(en.locale).toBe("en");
+		const fr = en.switchLocale("fr");
+		expect(fr.locale).toBe("fr");
+		// original instance is untouched (immutable)
+		expect(en.locale).toBe("en");
+		expect(fr.t("greeting")).toBe("Bonjour");
+	});
+
+	// Gap 9 — supportedLocales() inference
+	it("supportedLocales() infers from catalogs + fallbackLocales when unset", () => {
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			fallbackLocales: { "fr-ch": "fr" },
+		})
+			.loadMessages("en", { a: "1" })
+			.loadMessages("de", { a: "1" });
+
+		expect(i18n.supportedLocales().sort()).toEqual(
+			["de", "en", "fr-ch"].sort(),
+		);
+	});
+
+	it("supportedLocales() returns the configured list verbatim", () => {
+		const i18n = new Rosetta({
+			defaultLocale: "en",
+			supportedLocales: ["en", "fr"],
+		});
+		expect(i18n.supportedLocales().sort()).toEqual(["en", "fr"]);
 	});
 });

@@ -6,9 +6,12 @@ export type { FileSystemLoaderOptions } from "./loaders/FileSystemLoader.js";
 export { FileSystemLoader } from "./loaders/FileSystemLoader.js";
 export { isNativeAvailable } from "./native.js";
 export type {
+	CurrencyFormatOptions,
 	LocaleResolverInput,
 	MessageCatalog,
 	MessageTree,
+	MissingTranslationEventPayload,
+	MissingTranslationHandler,
 	NumberFormatData,
 	RosettaLoader,
 	RosettaLocale,

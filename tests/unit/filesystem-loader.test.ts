@@ -92,6 +92,60 @@ describe("rosetta > FileSystemLoader > extension fallback", () => {
 	});
 });
 
+describe("rosetta > FileSystemLoader > nested namespaces", () => {
+	let dir: string;
+	beforeEach(async () => {
+		dir = await fsp.mkdtemp(path.join(os.tmpdir(), "rosetta-fs-"));
+	});
+	afterEach(async () => {
+		await fsp.rm(dir, { recursive: true, force: true });
+	});
+
+	it("prefixes nested files with their path (locale/ns.json → ns.*)", async () => {
+		await fsp.mkdir(path.join(dir, "en", "admin"), { recursive: true });
+		await fsp.writeFile(
+			path.join(dir, "en", "messages.json"),
+			JSON.stringify({ welcome: "Welcome" }),
+		);
+		await fsp.writeFile(
+			path.join(dir, "en", "admin", "users.json"),
+			JSON.stringify({ save: "Save" }),
+		);
+		const loader = new FileSystemLoader({ rootDir: dir });
+
+		expect(await loader.load("en")).toEqual({
+			messages: { welcome: "Welcome" },
+			admin: { users: { save: "Save" } },
+		});
+	});
+
+	it("merges the flat file with nested namespaces", async () => {
+		await fsp.writeFile(
+			path.join(dir, "en.json"),
+			JSON.stringify({ hello: "Hi" }),
+		);
+		await fsp.mkdir(path.join(dir, "en"), { recursive: true });
+		await fsp.writeFile(
+			path.join(dir, "en", "validation.json"),
+			JSON.stringify({ required: "Required" }),
+		);
+		const loader = new FileSystemLoader({ rootDir: dir });
+
+		expect(await loader.load("en")).toEqual({
+			hello: "Hi",
+			validation: { required: "Required" },
+		});
+	});
+
+	it("supports YAML namespace files", async () => {
+		await fsp.mkdir(path.join(dir, "fr"), { recursive: true });
+		await fsp.writeFile(path.join(dir, "fr", "app.yaml"), "title: Bonjour");
+		const loader = new FileSystemLoader({ rootDir: dir });
+
+		expect(await loader.load("fr")).toEqual({ app: { title: "Bonjour" } });
+	});
+});
+
 describe("rosetta > FileSystemLoader > YAML parser", () => {
 	let dir: string;
 	beforeEach(async () => {

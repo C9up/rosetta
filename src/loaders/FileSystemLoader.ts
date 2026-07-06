@@ -21,6 +21,30 @@ export class FileSystemLoader implements RosettaLoader {
 		// `../../etc/passwd` would escape the rootDir without this check.
 		if (!SAFE_LOCALE_PATTERN.test(locale)) return null;
 
+		const tree: MessageTree = {};
+		let found = false;
+
+		// 1. Flat catalog: `{locale}.{json,yaml,yml}`.
+		const flat = await this.#loadFlatFile(locale);
+		if (flat) {
+			deepMerge(tree, flat);
+			found = true;
+		}
+
+		// 2. Nested namespaces: scan `{locale}/**` and prefix each file's keys
+		//    with its path relative to the locale dir (AdonisJS FS-loader parity).
+		const nested = await this.#loadNestedDir(locale);
+		if (nested) {
+			deepMerge(tree, nested);
+			found = true;
+		}
+
+		return found ? tree : null;
+	}
+
+	async #loadFlatFile(
+		locale: string,
+	): Promise<MessageTree | MessageCatalog | null> {
 		for (const ext of ["json", "yaml", "yml"]) {
 			const fullPath = path.join(this.#rootDir, `${locale}.${ext}`);
 			// Defense-in-depth: verify the resolved path is still inside rootDir
@@ -44,6 +68,105 @@ export class FileSystemLoader implements RosettaLoader {
 			}
 		}
 		return null;
+	}
+
+	async #loadNestedDir(locale: string): Promise<MessageTree | null> {
+		const baseDir = path.join(this.#rootDir, locale);
+		// Defense-in-depth: keep the namespace directory inside rootDir.
+		if (!path.resolve(baseDir).startsWith(path.resolve(this.#rootDir)))
+			return null;
+
+		let files: string[];
+		try {
+			files = await walkDir(baseDir);
+		} catch (err: unknown) {
+			// No namespace directory for this locale → nothing to load.
+			if (
+				typeof err === "object" &&
+				err !== null &&
+				"code" in err &&
+				err.code === "ENOENT"
+			)
+				return null;
+			throw err;
+		}
+
+		const tree: MessageTree = {};
+		let found = false;
+
+		for (const file of files) {
+			const ext = path.extname(file).slice(1).toLowerCase();
+			if (ext !== "json" && ext !== "yaml" && ext !== "yml") continue;
+
+			const rel = path.relative(baseDir, file);
+			const relNoExt = rel.slice(0, rel.length - path.extname(rel).length);
+			const segments = relNoExt.split(path.sep).filter(Boolean);
+			if (segments.length === 0) continue;
+
+			const raw = await fsp.readFile(file, "utf8");
+			const content: MessageTree | MessageCatalog =
+				ext === "json" ? JSON.parse(raw) : parseYaml(raw);
+
+			deepMerge(tree, nest(segments, content));
+			found = true;
+		}
+
+		return found ? tree : null;
+	}
+}
+
+/**
+ * Recursively collect every file path under `dir`. Entry names from `readdir`
+ * are single path components, so they cannot contain `..` — traversal stays
+ * contained within `dir`.
+ */
+async function walkDir(dir: string): Promise<string[]> {
+	const out: string[] = [];
+	const entries = await fsp.readdir(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			out.push(...(await walkDir(full)));
+		} else if (entry.isFile()) {
+			out.push(full);
+		}
+	}
+	return out;
+}
+
+/** Wrap `value` in a nested object following `segments` (`["a","b"] → {a:{b:value}}`). */
+function nest(
+	segments: string[],
+	value: MessageTree | MessageCatalog,
+): MessageTree {
+	const root: MessageTree = {};
+	let node = root;
+	for (let i = 0; i < segments.length - 1; i++) {
+		const child: MessageTree = {};
+		node[segments[i]] = child;
+		node = child;
+	}
+	node[segments[segments.length - 1]] = value;
+	return root;
+}
+
+/** Deep-merge `source` into `target`, recursing into nested object nodes. */
+function deepMerge(
+	target: MessageTree,
+	source: MessageTree | MessageCatalog,
+): void {
+	for (const [key, value] of Object.entries(source)) {
+		const existing = target[key];
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			existing !== null &&
+			typeof existing === "object"
+		) {
+			deepMerge(existing, value);
+		} else {
+			target[key] = value;
+		}
 	}
 }
 

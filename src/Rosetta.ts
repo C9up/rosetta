@@ -36,6 +36,29 @@ export interface TranslateOptions {
 	defaultValue?: string;
 }
 
+/**
+ * Payload passed to `onMissingTranslation`. Mirrors AdonisJS's
+ * `i18n:missing:translation` event shape verbatim.
+ */
+export interface MissingTranslationEventPayload {
+	locale: string;
+	identifier: string;
+	hasFallback: boolean;
+}
+
+export type MissingTranslationHandler = (
+	payload: MissingTranslationEventPayload,
+) => void;
+
+/**
+ * Options bag for `formatCurrency`, aligned with AdonisJS's
+ * `CurrencyFormatOptions` (a `NumberFormatOptions` that always carries a
+ * `currency`).
+ */
+export type CurrencyFormatOptions = Intl.NumberFormatOptions & {
+	currency: string;
+};
+
 export interface LocaleResolverInput {
 	header?: string | null;
 	accepted?: string[];
@@ -54,6 +77,26 @@ export interface RosettaOptions {
 	fallbackLocales?: Record<string, string>;
 	messages?: Record<string, MessageTree | MessageCatalog>;
 	loaders?: RosettaLoader[];
+
+	/**
+	 * Called when `t()` cannot resolve an identifier in the requested
+	 * (primary) locale — either it was missing everywhere
+	 * (`hasFallback: false`) or resolved through the fallback chain
+	 * (`hasFallback: true`). Mirrors AdonisJS's `i18n:missing:translation`
+	 * event but stays framework-agnostic: pass a plain callback, or bridge it
+	 * to a Ream emitter yourself
+	 * (`(p) => emitter.emit('i18n:missing:translation', p)`). No `@adonisjs`
+	 * import.
+	 */
+	onMissingTranslation?: MissingTranslationHandler;
+
+	/**
+	 * Controls what `t()` returns when an identifier is missing everywhere.
+	 * Mirrors AdonisJS's `config.fallback`. When omitted, `t()` returns the
+	 * Adonis-format string `"translation missing: <locale>, <identifier>"`. An
+	 * inline `defaultValue` (passed to `t()`) still wins over this.
+	 */
+	fallback?: (identifier: string, locale: string) => string;
 }
 
 /**
@@ -89,6 +132,20 @@ export class RosettaLocale {
 		return this.#locale;
 	}
 
+	/** AdonisJS parity: the active locale as a property. */
+	get locale(): string {
+		return this.#locale;
+	}
+
+	/**
+	 * AdonisJS parity, adapted to Rosetta's immutability: `RosettaLocale` is
+	 * request-scoped and immutable, so this returns a NEW instance bound to
+	 * `locale` instead of mutating in place (Adonis mutates the instance).
+	 */
+	switchLocale(locale: string): RosettaLocale {
+		return this.#manager.locale(locale);
+	}
+
 	has(key: string): boolean {
 		return this.#manager.has(key, this.#locale);
 	}
@@ -105,12 +162,27 @@ export class RosettaLocale {
 		return this.#manager.formatNumber(value, options, this.#locale);
 	}
 
+	formatCurrency(value: number, options: CurrencyFormatOptions): string;
+	/** @deprecated Prefer the options-bag form `formatCurrency(value, { currency })`. */
 	formatCurrency(
 		value: number,
 		currency: string,
 		options?: Intl.NumberFormatOptions,
+	): string;
+	formatCurrency(
+		value: number,
+		optionsOrCurrency: string | CurrencyFormatOptions,
+		options?: Intl.NumberFormatOptions,
 	): string {
-		return this.#manager.formatCurrency(value, currency, options, this.#locale);
+		if (typeof optionsOrCurrency === "string") {
+			return this.#manager.formatCurrency(
+				value,
+				optionsOrCurrency,
+				options,
+				this.#locale,
+			);
+		}
+		return this.#manager.formatCurrency(value, optionsOrCurrency, this.#locale);
 	}
 
 	formatDate(
@@ -120,12 +192,34 @@ export class RosettaLocale {
 		return this.#manager.formatDate(value, options, this.#locale);
 	}
 
+	formatTime(
+		value: Date | number | string,
+		options?: Intl.DateTimeFormatOptions,
+	): string {
+		return this.#manager.formatTime(value, options, this.#locale);
+	}
+
 	formatRelativeTime(
-		value: number,
-		unit: Intl.RelativeTimeFormatUnit,
+		value: Date | string | number,
+		unit: Intl.RelativeTimeFormatUnit | "auto",
 		options?: Intl.RelativeTimeFormatOptions,
 	): string {
 		return this.#manager.formatRelativeTime(value, unit, options, this.#locale);
+	}
+
+	formatPlural(
+		value: number | string,
+		options?: Intl.PluralRulesOptions,
+	): string {
+		return this.#manager.formatPlural(value, options, this.#locale);
+	}
+
+	formatList(list: Iterable<string>, options?: Intl.ListFormatOptions): string {
+		return this.#manager.formatList(list, options, this.#locale);
+	}
+
+	formatDisplayNames(code: string, options: Intl.DisplayNamesOptions): string {
+		return this.#manager.formatDisplayNames(code, options, this.#locale);
 	}
 
 	getNumberFormatData(): NumberFormatData {
@@ -158,6 +252,8 @@ export class Rosetta {
 	#supportedLocales?: Set<string>;
 	#loaders: RosettaLoader[];
 	#numberFormatDataCache: Map<string, NumberFormatData> = new Map();
+	#onMissingTranslation?: MissingTranslationHandler;
+	#fallback?: (identifier: string, locale: string) => string;
 
 	constructor(options: RosettaOptions = {}) {
 		this.#defaultLocale = normalizeLocale(
@@ -172,6 +268,8 @@ export class Rosetta {
 			? new Set(options.supportedLocales.map(normalizeLocale))
 			: undefined;
 		this.#loaders = options.loaders ?? [];
+		this.#onMissingTranslation = options.onMissingTranslation;
+		this.#fallback = options.fallback;
 
 		if (options.messages) {
 			for (const [locale, catalog] of Object.entries(options.messages)) {
@@ -241,6 +339,40 @@ export class Rosetta {
 			: undefined;
 	}
 
+	/**
+	 * AdonisJS parity: the locales supported by the app. When
+	 * `supportedLocales` is not configured, it is inferred from the default
+	 * locale, the `fallbackLocales` keys, and every locale whose catalog has
+	 * been loaded.
+	 */
+	supportedLocales(): string[] {
+		if (this.#supportedLocales) {
+			return Array.from(this.#supportedLocales);
+		}
+		const inferred = new Set<string>([this.#defaultLocale]);
+		for (const key of Object.keys(this.#fallbackLocales)) {
+			inferred.add(key);
+		}
+		for (const locale of this.#messages.keys()) {
+			inferred.add(locale);
+		}
+		return Array.from(inferred);
+	}
+
+	setOnMissingTranslation(
+		handler: MissingTranslationHandler | undefined,
+	): this {
+		this.#onMissingTranslation = handler;
+		return this;
+	}
+
+	setFallback(
+		fallback: ((identifier: string, locale: string) => string) | undefined,
+	): this {
+		this.#fallback = fallback;
+		return this;
+	}
+
 	setFallbackLocale(locale: string): this {
 		this.#fallbackLocale = normalizeLocale(locale);
 		this.#numberFormatDataCache.clear();
@@ -283,6 +415,19 @@ export class Rosetta {
 		return fallback ?? this.#defaultLocale;
 	}
 
+	/**
+	 * AdonisJS-compatible alias for {@link resolveLocale}. Accepts a raw
+	 * `accept-language` string or an array of preferred languages and returns
+	 * the best supported locale. Unlike Adonis (which returns `null` on no
+	 * match), Rosetta falls back to the default-locale chain — matching
+	 * `resolveLocale`'s always-resolve contract.
+	 */
+	getSupportedLocaleFor(userLanguage: string | string[]): string {
+		return this.resolveLocale(
+			Array.isArray(userLanguage) ? userLanguage.join(",") : userLanguage,
+		);
+	}
+
 	has(key: string, locale = this.#locale): boolean {
 		const normalizedLocale = normalizeLocale(locale);
 		const chain = this.#localeChainFor(normalizedLocale);
@@ -301,6 +446,26 @@ export class Rosetta {
 	): string {
 		const requestedLocale = normalizeLocale(options?.locale ?? this.#locale);
 		const chain = this.#localeChainFor(requestedLocale);
+		const status = this.#resolveStatus(key, chain);
+
+		// AdonisJS parity: notify when the primary locale can't resolve the
+		// identifier — either missing everywhere (`hasFallback: false`) or found
+		// only through the fallback chain (`hasFallback: true`).
+		if (status !== "primary" && this.#onMissingTranslation) {
+			this.#onMissingTranslation({
+				locale: requestedLocale,
+				identifier: key,
+				hasFallback: status === "fallback",
+			});
+		}
+
+		// Missing everywhere with no inline `defaultValue`: honor the configured
+		// `fallback` fn, else return Adonis's `"translation missing: …"` string.
+		if (status === "missing" && options?.defaultValue === undefined) {
+			const custom = this.#fallback?.(key, requestedLocale);
+			if (custom !== undefined) return custom;
+			return `translation missing: ${requestedLocale}, ${key}`;
+		}
 
 		if (!this.#nativeEngine) {
 			throw nativeEngineRequiredError();
@@ -335,16 +500,46 @@ export class Rosetta {
 
 	formatCurrency(
 		value: number,
+		options: CurrencyFormatOptions,
+		locale?: string,
+	): string;
+	/** @deprecated Prefer the options-bag form `formatCurrency(value, { currency })`. */
+	formatCurrency(
+		value: number,
 		currency: string,
 		options?: Intl.NumberFormatOptions,
-		locale = this.#locale,
+		locale?: string,
+	): string;
+	formatCurrency(
+		value: number,
+		optionsOrCurrency: string | CurrencyFormatOptions,
+		optionsOrLocale?: Intl.NumberFormatOptions | string,
+		legacyLocale?: string,
 	): string {
-		// Spread `options` FIRST so explicit `style: "currency"` and
+		// Spread caller options FIRST so explicit `style: "currency"` and
 		// `currency` always win — a caller's stray `{ style: "decimal" }`
 		// must not silently disable currency formatting.
+		if (typeof optionsOrCurrency === "string") {
+			// Legacy positional form: (value, currency, options?, locale?).
+			const options =
+				typeof optionsOrLocale === "object" ? optionsOrLocale : undefined;
+			const locale =
+				legacyLocale ??
+				(typeof optionsOrLocale === "string" ? optionsOrLocale : undefined) ??
+				this.#locale;
+			return this.formatNumber(
+				value,
+				{ ...options, style: "currency", currency: optionsOrCurrency },
+				locale,
+			);
+		}
+		// AdonisJS options-bag form: (value, { currency, ...opts }, locale?).
+		const { currency, ...rest } = optionsOrCurrency;
+		const locale =
+			typeof optionsOrLocale === "string" ? optionsOrLocale : this.#locale;
 		return this.formatNumber(
 			value,
-			{ ...options, style: "currency", currency },
+			{ ...rest, style: "currency", currency },
 			locale,
 		);
 	}
@@ -360,16 +555,102 @@ export class Rosetta {
 		);
 	}
 
+	/**
+	 * Format a value as a locale-aware time. Defaults to `timeStyle: "medium"`
+	 * (AdonisJS parity) unless the caller supplies explicit `hour`/`minute`/
+	 * `second` components.
+	 */
+	formatTime(
+		value: Date | number | string,
+		options?: Intl.DateTimeFormatOptions,
+		locale = this.#locale,
+	): string {
+		let opts = options;
+		if (!opts) {
+			opts = { timeStyle: "medium" };
+		} else if (!opts.hour && !opts.minute && !opts.second) {
+			opts = { timeStyle: "medium", ...opts };
+		}
+		return this.formatDate(value, opts, locale);
+	}
+
+	/**
+	 * Format a relative time. Accepts a `Date`, an ISO string, or a number
+	 * (a diff already expressed in `unit` — or in milliseconds when
+	 * `unit === "auto"`). With `"auto"`, the largest sensible unit is chosen.
+	 * No Luxon dependency — the diff is computed with plain `Date` math.
+	 */
 	formatRelativeTime(
-		value: number,
-		unit: Intl.RelativeTimeFormatUnit,
+		value: Date | string | number,
+		unit: Intl.RelativeTimeFormatUnit | "auto",
 		options?: Intl.RelativeTimeFormatOptions,
 		locale = this.#locale,
 	): string {
-		return new Intl.RelativeTimeFormat(normalizeLocale(locale), options).format(
-			value,
+		const resolved = normalizeLocale(locale);
+		const diff = this.#getTimeDiff(value, unit);
+		const formatter = new Intl.RelativeTimeFormat(resolved, {
+			...(options ?? {}),
+		});
+		if (unit === "auto") {
+			return formatRelativeAuto(formatter, diff);
+		}
+		return formatter.format(
+			typeof value === "number" ? diff : Math.floor(diff),
 			unit,
 		);
+	}
+
+	/**
+	 * Format a numeric value to its CLDR plural category
+	 * (`"zero" | "one" | "two" | "few" | "many" | "other"`).
+	 */
+	formatPlural(
+		value: number | string,
+		options?: Intl.PluralRulesOptions,
+		locale = this.#locale,
+	): string {
+		return new Intl.PluralRules(normalizeLocale(locale), options).select(
+			Number(value),
+		);
+	}
+
+	/** Format an iterable of strings into a locale-aware sentence list. */
+	formatList(
+		list: Iterable<string>,
+		options?: Intl.ListFormatOptions,
+		locale = this.#locale,
+	): string {
+		return new Intl.ListFormat(normalizeLocale(locale), options).format(list);
+	}
+
+	/**
+	 * Format a language / region / currency / script code to its localized
+	 * display name.
+	 */
+	formatDisplayNames(
+		code: string,
+		options: Intl.DisplayNamesOptions,
+		locale = this.#locale,
+	): string {
+		return (
+			new Intl.DisplayNames(normalizeLocale(locale), options).of(code) ?? code
+		);
+	}
+
+	#getTimeDiff(
+		value: Date | string | number,
+		unit: Intl.RelativeTimeFormatUnit | "auto",
+	): number {
+		// A number is already a diff expressed in `unit` (milliseconds for auto).
+		if (typeof value === "number") {
+			return value;
+		}
+		const date = value instanceof Date ? value : new Date(value);
+		const diffMs = date.getTime() - Date.now();
+		if (unit === "auto") {
+			return diffMs;
+		}
+		return diffMs / RELATIVE_UNIT_MS[unit];
 	}
 
 	/**
@@ -450,6 +731,28 @@ export class Rosetta {
 		}
 	}
 
+	/**
+	 * Classify an identifier's resolution against the locale chain, purely from
+	 * the TS-side catalogs (the Rust engine is frozen and doesn't report
+	 * hit/miss status). `"primary"` = found in the requested locale;
+	 * `"fallback"` = found only later in the chain; `"missing"` = absent
+	 * everywhere. Drives the `onMissingTranslation` payload's `hasFallback`.
+	 */
+	#resolveStatus(
+		key: string,
+		chain: string[],
+	): "primary" | "fallback" | "missing" {
+		if (this.#messages.get(chain[0])?.[key] !== undefined) {
+			return "primary";
+		}
+		for (let i = 1; i < chain.length; i++) {
+			if (this.#messages.get(chain[i])?.[key] !== undefined) {
+				return "fallback";
+			}
+		}
+		return "missing";
+	}
+
 	#pickFirstSupported(candidates: string[]): string | undefined {
 		if (!this.#supportedLocales) {
 			return candidates[0];
@@ -522,6 +825,53 @@ export class Rosetta {
 		this.#catalogsCache = cache;
 		this.#catalogsCacheDirty = false;
 	}
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const YEAR_MS = 365 * DAY_MS;
+
+/** Milliseconds per `Intl.RelativeTimeFormatUnit`, mirroring Adonis's units. */
+const RELATIVE_UNIT_MS: Record<Intl.RelativeTimeFormatUnit, number> = {
+	year: YEAR_MS,
+	years: YEAR_MS,
+	quarter: YEAR_MS / 4,
+	quarters: YEAR_MS / 4,
+	month: YEAR_MS / 12,
+	months: YEAR_MS / 12,
+	week: 7 * DAY_MS,
+	weeks: 7 * DAY_MS,
+	day: DAY_MS,
+	days: DAY_MS,
+	hour: 60 * 60 * 1000,
+	hours: 60 * 60 * 1000,
+	minute: 60 * 1000,
+	minutes: 60 * 1000,
+	second: 1000,
+	seconds: 1000,
+};
+
+/**
+ * Auto unit selection for `formatRelativeTime(value, "auto")`. Ports Adonis's
+ * relative-time formatter (smallest→largest unit) with plain millisecond math,
+ * no Luxon.
+ */
+function formatRelativeAuto(
+	formatter: Intl.RelativeTimeFormat,
+	diffMs: number,
+): string {
+	const abs = Math.abs(diffMs);
+	const MINUTE = 60 * 1000;
+	const HOUR = 60 * MINUTE;
+	const MONTH = YEAR_MS / 12;
+	if (abs < MINUTE)
+		return formatter.format(Math.floor(diffMs / 1000), "seconds");
+	if (abs < HOUR)
+		return formatter.format(Math.floor(diffMs / MINUTE), "minutes");
+	if (abs < DAY_MS) return formatter.format(Math.floor(diffMs / HOUR), "hours");
+	if (abs < MONTH) return formatter.format(Math.floor(diffMs / DAY_MS), "days");
+	if (abs < YEAR_MS)
+		return formatter.format(Math.floor(diffMs / MONTH), "months");
+	return formatter.format(Math.floor(diffMs / YEAR_MS), "years");
 }
 
 function normalizeLocale(locale: string): string {
