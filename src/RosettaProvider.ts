@@ -9,7 +9,7 @@ import { setI18n } from "./services/main.js";
  */
 interface RosettaContainer {
 	singleton(token: unknown, factory: () => unknown): void;
-	resolve<T = unknown>(token: unknown): T;
+	resolve<T = unknown>(token: unknown): Promise<T>;
 }
 interface RosettaConfigStore {
 	get<T = unknown>(key: string): T | undefined;
@@ -62,13 +62,13 @@ export default class RosettaProvider {
 			}
 			return new Rosetta(options);
 		});
-		this.app.container.singleton("i18n", () =>
+		this.app.container.singleton("i18n", async () =>
 			this.app.container.resolve<Rosetta>(Rosetta),
 		);
 	}
 
 	async boot(): Promise<void> {
-		const rosetta = this.app.container.resolve<Rosetta>(Rosetta);
+		const rosetta = await this.app.container.resolve<Rosetta>(Rosetta);
 		await rosetta.boot();
 		setI18n(rosetta);
 	}

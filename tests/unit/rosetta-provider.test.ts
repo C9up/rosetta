@@ -17,11 +17,11 @@ function buildApp(i18nConfig?: RosettaProviderConfig): RosettaAppContext {
 			singleton(token, factory) {
 				bindings.set(token, factory);
 			},
-			resolve<T>(token: unknown): T {
+			async resolve<T>(token: unknown): Promise<T> {
 				if (cache.has(token)) return cache.get(token) as T;
 				const factory = bindings.get(token);
 				if (!factory) throw new Error(`not registered: ${String(token)}`);
-				const value = factory();
+				const value = await factory();
 				cache.set(token, value);
 				return value as T;
 			},
@@ -35,13 +35,13 @@ function buildApp(i18nConfig?: RosettaProviderConfig): RosettaAppContext {
 }
 
 describe("rosetta > RosettaProvider", () => {
-	it("register binds a Rosetta under both the class token and the 'i18n' alias", () => {
+	it("register binds a Rosetta under both the class token and the 'i18n' alias", async () => {
 		const app = buildApp({ defaultLocale: "en" });
 		const provider = new RosettaProvider(app);
 		provider.register();
 
-		const viaClass = app.container.resolve<Rosetta>(Rosetta);
-		const viaAlias = app.container.resolve<Rosetta>("i18n");
+		const viaClass = await app.container.resolve<Rosetta>(Rosetta);
+		const viaAlias = await app.container.resolve<Rosetta>("i18n");
 		expect(viaClass).toBeInstanceOf(Rosetta);
 		expect(viaAlias).toBe(viaClass);
 	});
@@ -52,15 +52,15 @@ describe("rosetta > RosettaProvider", () => {
 		provider.register();
 		await provider.boot();
 
-		const instance = app.container.resolve<Rosetta>(Rosetta);
+		const instance = await app.container.resolve<Rosetta>(Rosetta);
 		expect(getI18n()).toBe(instance);
 	});
 
-	it("tolerates a missing i18n config block (empty options)", () => {
+	it("tolerates a missing i18n config block (empty options)", async () => {
 		const app = buildApp(undefined);
 		const provider = new RosettaProvider(app);
 		provider.register();
-		const instance = app.container.resolve<Rosetta>(Rosetta);
+		const instance = await app.container.resolve<Rosetta>(Rosetta);
 		expect(instance).toBeInstanceOf(Rosetta);
 	});
 
@@ -96,7 +96,7 @@ describe("rosetta > RosettaProvider", () => {
 			provider.register();
 			await provider.boot();
 
-			const instance = app.container.resolve<Rosetta>(Rosetta);
+			const instance = await app.container.resolve<Rosetta>(Rosetta);
 			const rendered = instance.locale("en").t("greeting", { name: "Alice" });
 			expect(rendered).toBe("Hello Alice");
 		});
