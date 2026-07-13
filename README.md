@@ -8,8 +8,10 @@ Part of **[Ream](https://github.com/C9up/ream)** — a Rust-powered, AdonisJS-co
 
 ```bash
 pnpm add @c9up/rosetta
-ream configure @c9up/rosetta
 ```
+
+Rosetta ships no auto-`configure` hook — register the provider and add
+`config/rosetta.ts` manually (see Usage below).
 
 ## Usage
 

@@ -40,7 +40,7 @@
     "build:wasm": "wasm-pack build --target web crates/rosetta-engine-wasm --out-dir ../../wasm",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc -p tsconfig.build.json"
+    "prepublishOnly": "tsc -p tsconfig.build.json && pnpm build:wasm && node scripts/verify-wasm.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",
