@@ -78,6 +78,28 @@ Supported ICU constructs include interpolation, `select`, `plural`,
 and ICU apostrophe escaping. Plural rules and localized number/date output use
 the runtime CLDR data through `Intl`.
 
+## Formatting
+
+Every `Intl`-backed helper is available both on a locale-scoped `i18n` instance
+and on a standalone `Formatter`, which is the same class — `i18n` extends it.
+
+```ts
+import { Formatter } from '@c9up/rosetta'
+
+const formatter = new Formatter('en-US')
+formatter.formatNumber(1234567.89)                    // '1,234,567.89'
+formatter.formatCurrency(1234.56, { currency: 'USD' }) // '$1,234.56'
+formatter.formatRelativeTime(-1, 'day')                // '1 day ago'
+formatter.formatList(['John', 'Jane', 'Bob'])          // 'John, Jane, and Bob'
+
+formatter.switchLocale('fr')
+formatter.formatNumber(1234.56)                        // '1 234,56'
+```
+
+`formatNumber`, `formatCurrency`, `formatDate`, `formatTime`,
+`formatRelativeTime` (including `'auto'`), `formatPlural`, `formatList` and
+`formatDisplayNames` all read the locale from the instance.
+
 ## HTTP, Inker And Validation
 
 `@c9up/rosetta/middleware` detects the best supported locale from

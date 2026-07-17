@@ -1,16 +1,16 @@
 import {
+	type CurrencyFormatOptions,
+	type DateTimeValue,
+	Formatter,
+	normalizeLocale,
+	type StringNumberFormat,
+} from "./formatters/Formatter.js";
+import {
 	type FormatterFactory,
 	IcuFormatter,
 	type TranslationsFormatterContract,
 } from "./formatters/IcuFormatter.js";
-import {
-	getDateTimeFormatter,
-	getDisplayNamesFormatter,
-	getListFormatter,
-	getNumberFormatter,
-	getPluralRules,
-	getRelativeTimeFormatter,
-} from "./formatters/IntlFormatterCache.js";
+import { getNumberFormatter } from "./formatters/IntlFormatterCache.js";
 import { createLocaleStorage } from "./locale-storage.js";
 
 export type TranslationParams = Record<string, unknown>;
@@ -47,24 +47,10 @@ export interface MissingTranslationEmitter {
 	): unknown;
 }
 
-/**
- * Options bag for `formatCurrency`, aligned with AdonisJS's
- * `CurrencyFormatOptions` (a `NumberFormatOptions` that always carries a
- * `currency`).
- */
-export type CurrencyFormatOptions = Omit<
-	Intl.NumberFormatOptions,
-	"style" | "unit" | "unitDisplay"
-> & {
-	currency: string;
-};
-
-export type DateTimeValue =
-	| Date
-	| number
-	| string
-	| { toJSDate(): Date }
-	| { toMillis(): number };
+export type {
+	CurrencyFormatOptions,
+	DateTimeValue,
+} from "./formatters/Formatter.js";
 
 export interface LocaleResolverInput {
 	header?: string | null;
@@ -142,15 +128,10 @@ export interface NumberFormatData {
 	plusSign: string;
 }
 
-interface StringNumberFormat extends Intl.NumberFormat {
-	format(value: number | bigint | string): string;
-}
-
 const DEFAULT_LOCALE = "en";
 
-export class RosettaLocale {
+export class RosettaLocale extends Formatter {
 	#manager: Rosetta;
-	#locale: string;
 	#emitter?: MissingTranslationEmitter;
 	fallbackLocale: string;
 
@@ -170,20 +151,23 @@ export class RosettaLocale {
 		localeOrEmitter: string | MissingTranslationEmitter,
 		emitterOrManager?: MissingTranslationEmitter | Rosetta,
 	) {
+		super(
+			typeof managerOrLocale === "string"
+				? managerOrLocale
+				: (localeOrEmitter as string),
+		);
 		if (typeof managerOrLocale === "string") {
-			this.#locale = normalizeLocale(managerOrLocale);
 			this.#emitter = localeOrEmitter as MissingTranslationEmitter;
 			this.#manager = emitterOrManager as Rosetta;
 		} else {
 			this.#manager = managerOrLocale;
-			this.#locale = normalizeLocale(localeOrEmitter as string);
 			this.#emitter = emitterOrManager as MissingTranslationEmitter | undefined;
 		}
-		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.#locale);
+		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.locale);
 	}
 
 	get localeTranslations(): MessageCatalog {
-		return this.#manager.getTranslationsFor(this.#locale);
+		return this.#manager.getTranslationsFor(this.locale);
 	}
 
 	get fallbackTranslations(): MessageCatalog {
@@ -191,18 +175,13 @@ export class RosettaLocale {
 	}
 
 	getLocale(): string {
-		return this.#locale;
-	}
-
-	/** AdonisJS parity: the active locale as a property. */
-	get locale(): string {
-		return this.#locale;
+		return this.locale;
 	}
 
 	/** Switch this request-scoped instance in place, matching AdonisJS I18n. */
-	switchLocale(locale: string): void {
-		this.#locale = normalizeLocale(locale);
-		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.#locale);
+	override switchLocale(locale: string): void {
+		super.switchLocale(locale);
+		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.locale);
 	}
 
 	resolveIdentifier(
@@ -253,14 +232,14 @@ export class RosettaLocale {
 			const resolved = this.resolveIdentifier(key);
 			if (!resolved || resolved.isFallback) {
 				this.#emitter.emit("i18n:missing:translation", {
-					locale: this.#locale,
+					locale: this.locale,
 					identifier: key,
 					hasFallback: resolved?.isFallback ?? false,
 				});
 			}
 		}
 		return this.#manager.t(key, params, {
-			locale: this.#locale,
+			locale: this.locale,
 			defaultValue: inlineFallback,
 			fallbackLocale: this.fallbackLocale,
 		});
@@ -283,95 +262,22 @@ export class RosettaLocale {
 	}
 
 	formatRawMessage(message: string, data?: TranslationParams): string {
-		return this.#manager.formatRawMessage(message, this.#locale, data);
+		return this.#manager.formatRawMessage(message, this.locale, data);
 	}
 
 	createMessagesProvider(prefix = "validator.shared"): I18nMessagesProvider {
 		return new I18nMessagesProvider(prefix, this);
 	}
 
-	formatNumber(
-		value: string | number | bigint,
-		options?: Intl.NumberFormatOptions,
-	): string {
-		return this.#manager.formatNumber(value, options, this.#locale);
-	}
-
-	formatCurrency(
-		value: string | number | bigint,
-		options: CurrencyFormatOptions,
-	): string;
-	/** @deprecated Prefer the options-bag form `formatCurrency(value, { currency })`. */
-	formatCurrency(
-		value: string | number | bigint,
-		currency: string,
-		options?: Intl.NumberFormatOptions,
-	): string;
-	formatCurrency(
-		value: string | number | bigint,
-		optionsOrCurrency: string | CurrencyFormatOptions,
-		options?: Intl.NumberFormatOptions,
-	): string {
-		if (typeof optionsOrCurrency === "string") {
-			return this.#manager.formatCurrency(
-				value,
-				optionsOrCurrency,
-				options,
-				this.#locale,
-			);
-		}
-		return this.#manager.formatCurrency(value, optionsOrCurrency, this.#locale);
-	}
-
-	formatDate(
-		value: DateTimeValue,
-		options?: Intl.DateTimeFormatOptions,
-	): string {
-		return this.#manager.formatDate(value, options, this.#locale);
-	}
-
-	formatTime(
-		value: DateTimeValue,
-		options?: Intl.DateTimeFormatOptions,
-	): string {
-		return this.#manager.formatTime(value, options, this.#locale);
-	}
-
-	formatRelativeTime(
-		value: DateTimeValue,
-		unit: Intl.RelativeTimeFormatUnit | "auto",
-		options?: Intl.RelativeTimeFormatOptions,
-	): string {
-		return this.#manager.formatRelativeTime(value, unit, options, this.#locale);
-	}
-
-	formatPlural(
-		value: number | string,
-		options?: Intl.PluralRulesOptions,
-	): string {
-		return this.#manager.formatPlural(value, options, this.#locale);
-	}
-
-	formatList(list: Iterable<string>, options?: Intl.ListFormatOptions): string {
-		return this.#manager.formatList(list, options, this.#locale);
-	}
-
-	formatDisplayNames(
-		code: string,
-		options: Intl.DisplayNamesOptions,
-	): string | undefined {
-		return this.#manager.formatDisplayNames(code, options, this.#locale);
-	}
-
 	getNumberFormatData(): NumberFormatData {
-		return this.#manager.getNumberFormatData(this.#locale);
+		return this.#manager.getNumberFormatData(this.locale);
 	}
 
 	formatNumberString(
 		value: string,
 		options?: Intl.NumberFormatOptions,
 	): string {
-		return this.#manager.formatNumberString(value, options, this.#locale);
+		return this.#manager.formatNumberString(value, options, this.locale);
 	}
 }
 
@@ -800,16 +706,22 @@ export class Rosetta {
 		return this.getFormatter().format(message, normalizeLocale(locale), data);
 	}
 
+	/**
+	 * Value formatting is implemented once, in {@link Formatter}. These
+	 * manager-level wrappers only bind the locale — a `Formatter` holds a single
+	 * string and every `Intl.*` object behind it is memoized, so constructing
+	 * one per call costs nothing next to the formatting itself.
+	 */
+	#formatterFor(locale: string): Formatter {
+		return new Formatter(locale);
+	}
+
 	formatNumber(
 		value: string | number | bigint,
 		options?: Intl.NumberFormatOptions,
 		locale = this.getLocale(),
 	): string {
-		const formatter = getNumberFormatter(
-			normalizeLocale(locale),
-			options,
-		) as StringNumberFormat;
-		return formatter.format(value);
+		return this.#formatterFor(locale).formatNumber(value, options);
 	}
 
 	formatCurrency(
@@ -830,9 +742,6 @@ export class Rosetta {
 		optionsOrLocale?: Intl.NumberFormatOptions | string,
 		legacyLocale?: string,
 	): string {
-		// Spread caller options FIRST so explicit `style: "currency"` and
-		// `currency` always win — a caller's stray `{ style: "decimal" }`
-		// must not silently disable currency formatting.
 		if (typeof optionsOrCurrency === "string") {
 			// Legacy positional form: (value, currency, options?, locale?).
 			const options =
@@ -841,21 +750,15 @@ export class Rosetta {
 				legacyLocale ??
 				(typeof optionsOrLocale === "string" ? optionsOrLocale : undefined) ??
 				this.getLocale();
-			return this.formatNumber(
+			return this.#formatterFor(locale).formatCurrency(
 				value,
-				{ ...options, style: "currency", currency: optionsOrCurrency },
-				locale,
+				optionsOrCurrency,
+				options,
 			);
 		}
-		// AdonisJS options-bag form: (value, { currency, ...opts }, locale?).
-		const { currency, ...rest } = optionsOrCurrency;
 		const locale =
 			typeof optionsOrLocale === "string" ? optionsOrLocale : this.getLocale();
-		return this.formatNumber(
-			value,
-			{ ...rest, style: "currency", currency },
-			locale,
-		);
+		return this.#formatterFor(locale).formatCurrency(value, optionsOrCurrency);
 	}
 
 	formatDate(
@@ -863,102 +766,48 @@ export class Rosetta {
 		options?: Intl.DateTimeFormatOptions,
 		locale = this.getLocale(),
 	): string {
-		const date = new Date(normalizeDateTimeValue(value));
-		return getDateTimeFormatter(normalizeLocale(locale), options).format(date);
+		return this.#formatterFor(locale).formatDate(value, options);
 	}
 
-	/**
-	 * Format a value as a locale-aware time. Defaults to `timeStyle: "medium"`
-	 * (AdonisJS parity) unless the caller supplies explicit `hour`/`minute`/
-	 * `second` components.
-	 */
 	formatTime(
 		value: DateTimeValue,
 		options?: Intl.DateTimeFormatOptions,
 		locale = this.getLocale(),
 	): string {
-		let opts = options;
-		if (!opts) {
-			opts = { timeStyle: "medium" };
-		} else if (!opts.hour && !opts.minute && !opts.second) {
-			opts = { timeStyle: "medium", ...opts };
-		}
-		return this.formatDate(value, opts, locale);
+		return this.#formatterFor(locale).formatTime(value, options);
 	}
 
-	/**
-	 * Format a relative time. Accepts a `Date`, an ISO string, or a number
-	 * (a diff already expressed in `unit` — or in milliseconds when
-	 * `unit === "auto"`). With `"auto"`, the largest sensible unit is chosen.
-	 * No Luxon dependency — the diff is computed with plain `Date` math.
-	 */
 	formatRelativeTime(
 		value: DateTimeValue,
 		unit: Intl.RelativeTimeFormatUnit | "auto",
 		options?: Intl.RelativeTimeFormatOptions,
 		locale = this.getLocale(),
 	): string {
-		const resolved = normalizeLocale(locale);
-		const diff = this.#getTimeDiff(value, unit);
-		const formatter = getRelativeTimeFormatter(resolved, options);
-		if (unit === "auto") {
-			return formatRelativeAuto(formatter, diff);
-		}
-		return formatter.format(
-			typeof value === "number" ? diff : Math.floor(diff),
-			unit,
-		);
+		return this.#formatterFor(locale).formatRelativeTime(value, unit, options);
 	}
 
-	/**
-	 * Format a numeric value to its CLDR plural category
-	 * (`"zero" | "one" | "two" | "few" | "many" | "other"`).
-	 */
 	formatPlural(
 		value: number | string,
 		options?: Intl.PluralRulesOptions,
 		locale = this.getLocale(),
 	): string {
-		return getPluralRules(normalizeLocale(locale), options).select(
-			Number(value),
-		);
+		return this.#formatterFor(locale).formatPlural(value, options);
 	}
 
-	/** Format an iterable of strings into a locale-aware sentence list. */
 	formatList(
 		list: Iterable<string>,
 		options?: Intl.ListFormatOptions,
 		locale = this.getLocale(),
 	): string {
-		return getListFormatter(normalizeLocale(locale), options).format(list);
+		return this.#formatterFor(locale).formatList(list, options);
 	}
 
-	/**
-	 * Format a language / region / currency / script code to its localized
-	 * display name.
-	 */
 	formatDisplayNames(
 		code: string,
 		options: Intl.DisplayNamesOptions,
 		locale = this.getLocale(),
 	): string | undefined {
-		return getDisplayNamesFormatter(normalizeLocale(locale), options).of(code);
-	}
-
-	#getTimeDiff(
-		value: DateTimeValue,
-		unit: Intl.RelativeTimeFormatUnit | "auto",
-	): number {
-		// A number is already a diff expressed in `unit` (milliseconds for auto).
-		if (typeof value === "number") {
-			return value;
-		}
-		const date = new Date(normalizeDateTimeValue(value));
-		const diffMs = date.getTime() - Date.now();
-		if (unit === "auto") {
-			return diffMs;
-		}
-		return diffMs / RELATIVE_UNIT_MS[unit];
+		return this.#formatterFor(locale).formatDisplayNames(code, options);
 	}
 
 	/**
@@ -1176,64 +1025,6 @@ export class Rosetta {
 
 		return chain;
 	}
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const YEAR_MS = 365 * DAY_MS;
-
-/** Milliseconds per `Intl.RelativeTimeFormatUnit`, mirroring Adonis's units. */
-const RELATIVE_UNIT_MS: Record<Intl.RelativeTimeFormatUnit, number> = {
-	year: YEAR_MS,
-	years: YEAR_MS,
-	quarter: YEAR_MS / 4,
-	quarters: YEAR_MS / 4,
-	month: YEAR_MS / 12,
-	months: YEAR_MS / 12,
-	week: 7 * DAY_MS,
-	weeks: 7 * DAY_MS,
-	day: DAY_MS,
-	days: DAY_MS,
-	hour: 60 * 60 * 1000,
-	hours: 60 * 60 * 1000,
-	minute: 60 * 1000,
-	minutes: 60 * 1000,
-	second: 1000,
-	seconds: 1000,
-};
-
-/**
- * Auto unit selection for `formatRelativeTime(value, "auto")`. Ports Adonis's
- * relative-time formatter (smallest→largest unit) with plain millisecond math,
- * no Luxon.
- */
-function formatRelativeAuto(
-	formatter: Intl.RelativeTimeFormat,
-	diffMs: number,
-): string {
-	const abs = Math.abs(diffMs);
-	const MINUTE = 60 * 1000;
-	const HOUR = 60 * MINUTE;
-	const MONTH = YEAR_MS / 12;
-	if (abs < MINUTE)
-		return formatter.format(Math.floor(diffMs / 1000), "seconds");
-	if (abs < HOUR)
-		return formatter.format(Math.floor(diffMs / MINUTE), "minutes");
-	if (abs < DAY_MS) return formatter.format(Math.floor(diffMs / HOUR), "hours");
-	if (abs < MONTH) return formatter.format(Math.floor(diffMs / DAY_MS), "days");
-	if (abs < YEAR_MS)
-		return formatter.format(Math.floor(diffMs / MONTH), "months");
-	return formatter.format(Math.floor(diffMs / YEAR_MS), "years");
-}
-
-function normalizeLocale(locale: string): string {
-	return locale.trim().replace(/_/g, "-").toLowerCase();
-}
-
-function normalizeDateTimeValue(value: DateTimeValue): Date | number {
-	if (value instanceof Date || typeof value === "number") return value;
-	if (typeof value === "string") return new Date(value);
-	if ("toJSDate" in value) return value.toJSDate();
-	return value.toMillis();
 }
 
 function normalizeFallbackMap(

@@ -16,6 +16,7 @@ import {
 	type FileSystemLoaderOptions,
 } from "./loaders/FileSystemLoader.js";
 
+export { Formatter } from "./formatters/Formatter.js";
 export type {
 	FormatterFactory,
 	NumberFormatOptions,
