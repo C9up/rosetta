@@ -114,6 +114,52 @@ canonical `t()` helper; the middleware writes the negotiated language to
 `ctx.locale`, which Inker reads per render. The Edge adapter remains exported
 from `@c9up/rosetta/plugins/edge` for Edge-compatible non-Ream hosts.
 
+## Typed Translation Keys
+
+Catalogs are JSON/YAML read at runtime, so the compiler cannot see them.
+`generateCatalogTypes` closes that gap: it reads your catalogs and emits a
+declaration that types `t()` — unknown keys, misspelled variables and wrong
+variable types all become compile errors.
+
+```ts
+// scripts/i18n-types.ts
+import { writeFileSync } from 'node:fs'
+import { generateCatalogTypes } from '@c9up/rosetta'
+import i18nManager from '@c9up/rosetta/services/main'
+
+await i18nManager.loadTranslations()
+writeFileSync(
+  'types/i18n.d.ts',
+  generateCatalogTypes(i18nManager.getTranslations(), { referenceLocale: 'en' }),
+)
+```
+
+The generated file augments `TranslationKeys` — the same declaration-merging
+idiom AdonisJS uses for `EventsList`:
+
+```ts
+declare module '@c9up/rosetta' {
+  interface TranslationKeys {
+    'messages.greeting': { 'name': string | number }
+    'messages.items': { 'count': number }
+  }
+}
+```
+
+```ts
+i18n.t('messages.greeting', { name: 'Hugo' })  // ok
+i18n.t('messages.greetingg', { name: 'Hugo' }) // error: unknown key
+i18n.t('messages.items', { count: '2' })       // error: a plural takes a number
+```
+
+Until you generate that file, `TranslationKeys` is empty and `t()` accepts
+every string exactly as before — opting in is what turns the checks on.
+
+One limit worth knowing: `t('messages.items')` with the variables omitted still
+compiles, because `t(key, fallbackMessage?)` is a valid call. Typing catches
+wrong keys, wrong variable names and wrong types — not forgotten arguments.
+`checkCatalogs` covers the catalog side of the same class of bug.
+
 ## Checking Catalogs
 
 Catalogs drift silently: a key lands in `en` and is forgotten in `fr`, a

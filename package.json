@@ -66,7 +66,8 @@
     "lint": "biome check src/ tests/",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs && node scripts/verify-package.mjs"
+    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs && node scripts/verify-package.mjs",
+    "test:types": "tsc --noEmit -p tsconfig.types.json"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

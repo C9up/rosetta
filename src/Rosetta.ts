@@ -27,6 +27,40 @@ export interface TranslateOptions {
 }
 
 /**
+ * Declaration-merging slot for typed translation keys. Empty here; augment it
+ * from your app and `t()` starts rejecting unknown keys and checking each
+ * message's variables. Generate the augmentation from your catalogs with
+ * `generateCatalogTypes` rather than writing it by hand.
+ *
+ * Same idiom as AdonisJS's `EventsList`:
+ *
+ * ```ts
+ * declare module '@c9up/rosetta' {
+ *   interface TranslationKeys {
+ *     'messages.greeting': { name: string | number }
+ *     'messages.items': { count: number }
+ *   }
+ * }
+ * ```
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: the empty body IS the contract — consumers augment it, and `keyof` resolving to `never` is what keeps `t()` permissive until they do.
+export interface TranslationKeys {}
+
+/**
+ * The keys `t()` accepts: every string while {@link TranslationKeys} is
+ * un-augmented, the declared keys once it is. The `never` probe is what keeps
+ * an un-augmented app compiling exactly as before.
+ */
+export type TranslationKey = [keyof TranslationKeys] extends [never]
+	? string
+	: keyof TranslationKeys & string;
+
+/** The variables a given key needs — loose unless that key has been declared. */
+export type ParamsFor<K extends string> = K extends keyof TranslationKeys
+	? TranslationKeys[K]
+	: TranslationParams;
+
+/**
  * Payload passed to `onMissingTranslation`. Mirrors AdonisJS's
  * `i18n:missing:translation` event shape verbatim.
  */
@@ -207,15 +241,33 @@ export class RosettaLocale extends Formatter {
 		return this.hasMessage(key) || this.hasFallbackMessage(key);
 	}
 
-	t(key: string, fallbackMessage?: string): string;
-	t(key: string, params?: TranslationParams, fallbackMessage?: string): string;
+	t<K extends TranslationKey>(key: K, fallbackMessage?: string): string;
+	t<K extends TranslationKey>(
+		key: K,
+		params?: ParamsFor<K>,
+		fallbackMessage?: string,
+	): string;
 	/** Backward-compatible Rosetta options form. */
-	t(
-		key: string,
-		params?: TranslationParams,
+	t<K extends TranslationKey>(
+		key: K,
+		params?: ParamsFor<K>,
 		options?: Omit<TranslateOptions, "locale">,
 	): string;
 	t(
+		key: string,
+		paramsOrFallback?: TranslationParams | string,
+		fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
+	): string {
+		return this.#translate(key, paramsOrFallback, fallbackOrOptions);
+	}
+
+	/**
+	 * The untyped body behind `t()` and `formatMessage()`. Both narrow their key
+	 * to {@link TranslationKey}, which a consumer's augmentation turns into a
+	 * union — so the internal hop between them has to go through a signature
+	 * that still accepts a plain string.
+	 */
+	#translate(
 		key: string,
 		paramsOrFallback?: TranslationParams | string,
 		fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
@@ -245,10 +297,13 @@ export class RosettaLocale extends Formatter {
 		});
 	}
 
-	formatMessage(identifier: string, fallbackMessage?: string): string;
-	formatMessage(
-		identifier: string,
-		data: TranslationParams,
+	formatMessage<K extends TranslationKey>(
+		identifier: K,
+		fallbackMessage?: string,
+	): string;
+	formatMessage<K extends TranslationKey>(
+		identifier: K,
+		data: ParamsFor<K>,
 		fallbackMessage?: string,
 	): string;
 	formatMessage(
@@ -257,8 +312,8 @@ export class RosettaLocale extends Formatter {
 		fallbackMessage?: string,
 	): string {
 		return typeof dataOrFallback === "string"
-			? this.t(identifier, dataOrFallback)
-			: this.t(identifier, dataOrFallback, fallbackMessage);
+			? this.#translate(identifier, dataOrFallback)
+			: this.#translate(identifier, dataOrFallback, fallbackMessage);
 	}
 
 	formatRawMessage(message: string, data?: TranslationParams): string {

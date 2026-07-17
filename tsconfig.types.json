@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  // `exclude` must be restated: the base config drops tests/types so that the
+  // fixture's global `TranslationKeys` augmentation cannot leak into the normal
+  // typecheck. Inheriting that exclusion here would silently compile nothing.
+  "exclude": ["node_modules", "dist"],
+  "include": ["src/**/*.ts", "tests/types/**/*.ts"]
+}

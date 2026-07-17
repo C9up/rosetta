@@ -35,6 +35,7 @@
     "tests"
   ],
   "exclude": [
+		"tests/types",
     "node_modules",
     "dist"
   ]

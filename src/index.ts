@@ -28,6 +28,8 @@ export {
 	suggestKey,
 	verifyCatalogs,
 } from "./CatalogCheck.js";
+export type { GenerateCatalogTypesOptions } from "./CatalogTypes.js";
+export { generateCatalogTypes } from "./CatalogTypes.js";
 export { Formatter } from "./formatters/Formatter.js";
 export type {
 	FormatterFactory,
@@ -64,9 +66,12 @@ export type {
 	MissingTranslationEventPayload,
 	MissingTranslationHandler,
 	NumberFormatData,
+	ParamsFor,
 	RosettaLoader,
 	RosettaOptions,
 	TranslateOptions,
+	TranslationKey,
+	TranslationKeys,
 	TranslationParams,
 	Translations,
 	TranslationsLoaderContract,
