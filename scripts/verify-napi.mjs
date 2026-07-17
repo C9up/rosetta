@@ -28,29 +28,8 @@ if (!existsSync(binary)) {
 const require2 = createRequire(import.meta.url)
 const binding = require2(binary)
 
-if (
-  typeof binding.translate !== 'function' ||
-  typeof binding.has !== 'function' ||
-  typeof binding.parseMessage !== 'function' ||
-  typeof binding.parseCatalog !== 'function'
-) {
-  throw new Error(
-    '[rosetta:napi] invalid exports: expected translate(), has(), parseMessage(), and parseCatalog()',
-  )
-}
-
-const catalogs = JSON.stringify({ en: { hello: 'Hello {name}' } })
-const chain = JSON.stringify(['en'])
-const params = JSON.stringify({ name: 'Kaen' })
-
-const translated = binding.translate(catalogs, 'hello', params, chain, undefined)
-if (translated !== 'Hello Kaen') {
-  throw new Error(`[rosetta:napi] translate smoke test failed: got "${translated}"`)
-}
-
-const hasKey = binding.has(catalogs, 'hello', chain)
-if (hasKey !== true) {
-  throw new Error('[rosetta:napi] has smoke test failed')
+if (typeof binding.parseMessage !== 'function' || typeof binding.parseCatalog !== 'function') {
+  throw new Error('[rosetta:napi] invalid exports: expected parseMessage() and parseCatalog()')
 }
 
 const ast = JSON.parse(binding.parseMessage('{count, plural, one {One} other {#}}'))

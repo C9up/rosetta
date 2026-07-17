@@ -16,16 +16,6 @@
 
 export default function init(): Promise<unknown>;
 
-export function translate(
-  catalogsJson: string,
-  key: string,
-  paramsJson: string | undefined,
-  chainJson: string,
-  defaultValue: string | undefined,
-): string;
-
-export function has(catalogsJson: string, key: string, chainJson: string): boolean;
-
 export function parse_message(message: string): string;
 
 export function parse_catalog(input: string, format: string): string;
