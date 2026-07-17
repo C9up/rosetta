@@ -109,6 +109,20 @@ folded block scalars. Unsupported constructs such as sequences, flow mappings,
 anchors, aliases, tags and merge keys raise an error instead of being silently
 partially loaded. JSON catalogs have no such YAML-specific restrictions.
 
+## Upgrading To 0.2.0
+
+The Rust N-API engine and its binary are gone; the package is pure TypeScript.
+
+- Remove any `pnpm build:napi` step from your build or CI. There is no binary
+  and no Rust toolchain to install.
+- `isNativeAvailable()` is no longer exported. It reported whether the native
+  binary had loaded, which is now always moot.
+
+Nothing else changed: same API, same catalogs, and every message renders
+exactly as before. Rendering already ran on `Intl` — the engine only parsed —
+so this is a packaging change, not a behavioural one. Alpine/musl images, which
+never had a binary to load, are unaffected.
+
 ## Entry Points
 
 - `@c9up/rosetta`
