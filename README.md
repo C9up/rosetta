@@ -5,16 +5,11 @@ Internationalization for Ream applications with an API aligned with
 content negotiation and YAML catalog loading are implemented in the package,
 while locale data and formatting come from Node's built-in `Intl` APIs.
 
-Rendering is always done in JavaScript on `Intl`, so CLDR plural rules and
-number/date formatting track the runtime instead of a table maintained here.
-Rust is used for parsing only, and only as an optional accelerator: when a
-binary is available it validates ICU syntax and parses JSON/YAML catalogs
-(N-API under Node, WebAssembly in the browser). Otherwise a behavior-equivalent
-TypeScript parser takes over — it produces the same AST, raises the same
-errors, and shares the same parse cache, so a message is parsed once per
-process either way. No binary is shipped for musl (Alpine) or for platforms
-outside the prebuilt matrix; those run the TypeScript parser, which is
-supported, not a degraded mode.
+Rendering runs on `Intl`, so CLDR plural rules and number/date formatting track
+the runtime instead of a table maintained here. Parsing is pure TypeScript:
+each ICU message is parsed to an AST once per process and cached. The package
+is platform-independent — no native binary, no build toolchain, and the same
+behaviour on glibc, musl/Alpine and in the browser.
 
 ## Requirements
 

@@ -2,7 +2,6 @@ import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeParseCatalog } from "../native.js";
 import type { MessageCatalog, MessageTree, RosettaLoader } from "../Rosetta.js";
 
 const SAFE_LOCALE_PATTERN = /^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/;
@@ -202,13 +201,10 @@ function parseCatalog(
 ): MessageTree | MessageCatalog {
 	const normalizedInput = input.replace(/^\uFEFF/, "");
 	try {
-		const nativeJson = nativeParseCatalog(normalizedInput, format);
-		const catalog =
-			nativeJson !== null
-				? (JSON.parse(nativeJson) as unknown)
-				: format === "json"
-					? (JSON.parse(normalizedInput.trim()) as unknown)
-					: parseYaml(normalizedInput);
+		const catalog: unknown =
+			format === "json"
+				? JSON.parse(normalizedInput.trim())
+				: parseYaml(normalizedInput);
 		validateCatalogValue(catalog, "<root>", 0, { keys: 0 });
 		return catalog;
 	} catch (error) {

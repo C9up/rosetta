@@ -32,7 +32,6 @@ import type { I18nManagerConfig, LoaderFactory } from "./Rosetta.js";
 
 export { configure, stubsRoot } from "./configure.js";
 export type { I18nHttpContext, RequestValidatorLike } from "./middleware.js";
-export { isNativeAvailable } from "./native.js";
 export type {
 	BaseI18nConfig,
 	CurrencyFormatOptions,

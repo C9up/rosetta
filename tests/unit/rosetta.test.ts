@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FileSystemLoader } from "../../src/loaders/FileSystemLoader.js";
-import { isNativeAvailable } from "../../src/native.js";
 import type { MessageTree } from "../../src/Rosetta.js";
 import { Rosetta } from "../../src/Rosetta.js";
 
@@ -20,10 +19,6 @@ describe("rosetta", () => {
 		expect(scoped.hasMessage("added")).toBe(true);
 		expect(scoped.hasFallbackMessage("lateFallback")).toBe(true);
 		expect(scoped.resolveIdentifier("added")?.message).toBe("Added");
-	});
-
-	it("exposes native availability flag", () => {
-		expect(typeof isNativeAvailable()).toBe("boolean");
 	});
 
 	it("translates with current locale", () => {

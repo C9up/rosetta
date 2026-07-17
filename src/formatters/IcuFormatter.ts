@@ -1,4 +1,3 @@
-import { nativeParseMessage } from "../native.js";
 import type { RosettaOptions } from "../Rosetta.js";
 import {
 	getDateTimeFormatter,
@@ -123,12 +122,8 @@ export class IcuFormatter implements TranslationsFormatterContract {
 }
 
 /**
- * Resolve a message to its AST, memoized. The native engine parses when a
- * binary is loadable; otherwise the behaviour-equivalent TypeScript parser
- * runs. Both tiers produce the same AST, feed the same evaluator, and populate
- * the same cache — so a given message is parsed exactly once per process no
- * matter which tier produced it. (Before, only the native tier was cached and
- * the TypeScript fallback re-parsed on every single call.)
+ * Resolve a message to its AST, memoized, so a message is parsed once per
+ * process however often it is formatted.
  */
 function getMessageAst(message: string): MessageNode[] {
 	if (message.length > MAX_MESSAGE_LENGTH) {
@@ -138,7 +133,7 @@ function getMessageAst(message: string): MessageNode[] {
 	}
 	const cached = messageAstCache.get(message);
 	if (cached) return cached;
-	const ast = parseMessage(message);
+	const ast = parseMessageToAst(message);
 	if (message.length <= MAX_CACHED_MESSAGE_LENGTH) {
 		if (messageAstCache.size >= MAX_AST_CACHE_ENTRIES) {
 			const oldest = messageAstCache.keys().next().value;
@@ -146,15 +141,6 @@ function getMessageAst(message: string): MessageNode[] {
 		}
 		messageAstCache.set(message, ast);
 	}
-	return ast;
-}
-
-function parseMessage(message: string): MessageNode[] {
-	const serialized = nativeParseMessage(message);
-	if (serialized === null) return parseMessageToAst(message);
-	const ast = JSON.parse(serialized) as MessageNode[];
-	if (!Array.isArray(ast))
-		throw new SyntaxError("Invalid ICU AST from native engine");
 	return ast;
 }
 
@@ -236,13 +222,7 @@ function assertNever(value: never): never {
 	throw new TypeError(`Unsupported ICU AST node: ${JSON.stringify(value)}`);
 }
 
-/**
- * Dependency-free TypeScript ICU parser. Mirrors the Rust `message_ast.rs`
- * grammar node-for-node so both tiers emit an identical AST and the evaluator
- * (and every error message) behaves the same whether or not a native binary
- * loaded. Runs when no native engine is available — notably on musl/Alpine and
- * any platform outside the prebuilt matrix.
- */
+/** Dependency-free ICU parser. Emits the AST consumed by {@link MessageEvaluator}. */
 function parseMessageToAst(message: string): MessageNode[] {
 	return parseSegmentToAst(message, 0, { nodes: 0 });
 }

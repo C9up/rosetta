@@ -38,111 +38,7 @@ jobs:
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
       - run: pnpm lint
       - run: pnpm test:browser
-      # A clean checkout has no .node artifact, so this also exercises the
-      # dependency-free TypeScript fallback instead of only the native path.
       - run: pnpm test
-  # 5-platform NAPI matrix. rosetta is fully self-contained: its runtime and
-  # test suite have zero @c9up dependencies, so it builds and tests standalone
-  # with no workspace stub. darwin-x64 is cross-compiled on an arm64 runner
-  # (macos-13 Intel runners are scarce/deprecated); build-only.
-  build-and-test:
-    name: Build & test (${{ matrix.suffix }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest,    suffix: linux-x64-gnu,   target: x86_64-unknown-linux-gnu,  test: true }
-          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, target: aarch64-unknown-linux-gnu, test: true }
-          - { os: macos-14,         suffix: darwin-x64,      target: x86_64-apple-darwin,       test: false }
-          - { os: macos-14,         suffix: darwin-arm64,    target: aarch64-apple-darwin,      test: true }
-          - { os: windows-latest,   suffix: win32-x64-msvc,  target: x86_64-pc-windows-msvc,    test: true }
-    steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-        with: { version: 9 }
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Build NAPI binary (${{ matrix.target }})
-        run: pnpm build:napi
-        env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
-
-      - name: Verify NAPI exports
-        if: matrix.test
-        run: pnpm test:napi
-
-      - name: Vitest (JSON reporter)
-        if: matrix.test
-        run: pnpm exec vitest run --reporter=json --outputFile=test-results.json
-        shell: bash
-
-      - name: Smoke gate — tests ran AND zero skipped (Linux/macOS)
-        if: matrix.test && runner.os != 'Windows'
-        run: |
-          if [ ! -f test-results.json ]; then
-            echo "::error::test-results.json not produced — pnpm test failed before writing"
-            exit 1
-          fi
-          total=$(jq '[.testResults[].assertionResults[]] | length' test-results.json)
-          if [ "$total" -eq 0 ]; then
-            echo "::error::0 tests ran — test discovery is broken (check vitest include glob)"
-            exit 1
-          fi
-          skipped=$(jq '[.testResults[].assertionResults[] | select(.status=="skipped")] | length' test-results.json)
-          if [ "$skipped" -ne 0 ]; then
-            echo "::error::$skipped tests skipped — check NAPI binary load path"
-            exit 1
-          fi
-        shell: bash
-
-      - name: Smoke gate — tests ran AND zero skipped (Windows)
-        if: matrix.test && runner.os == 'Windows'
-        run: |
-          $path = "test-results.json"
-          if (-not (Test-Path $path)) {
-            Write-Error "test-results.json not produced — pnpm test failed before writing"
-            exit 1
-          }
-          $total = python -c "import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for r in d['testResults'] for a in r['assertionResults']))" $path
-          if ([int]$total -eq 0) {
-            Write-Error "0 tests ran — test discovery is broken (check vitest include glob)"
-            exit 1
-          }
-          $skipped = python -c "import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for r in d['testResults'] for a in r['assertionResults'] if a['status']=='skipped'))" $path
-          if ([int]$skipped -ne 0) {
-            Write-Error "$skipped tests skipped — check NAPI binary load path"
-            exit 1
-          }
-        shell: pwsh
-
-      - name: Upload artefact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rosetta-napi-${{ matrix.suffix }}
-          path: index.${{ matrix.suffix }}.node
-          if-no-files-found: error
-
-  cargo-tests:
-    name: Cargo quality (linux-x64-gnu + wasm32)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo check -p rosetta-engine-wasm --target wasm32-unknown-unknown
-
   # Publish job — gated on workflow_dispatch (manual maintainer trigger).
   # Requires NPM_TOKEN secret + a v<MAJOR>.<MINOR>.<PATCH> tag at HEAD matching
   # package.json. Drift gate refuses to overwrite a published version (or roll
@@ -151,7 +47,7 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [quality, build-and-test, cargo-tests]
+    needs: [quality]
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
@@ -249,22 +145,6 @@ jobs:
           fi
 
       - run: pnpm install --no-frozen-lockfile
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: rosetta-napi-*
-          merge-multiple: true
-
-      # Browser engine: build the WASM into the tarball. `pnpm publish` triggers
-      # prepublishOnly (`tsc && pnpm build:wasm && verify-wasm`), so the wasm
-      # toolchain must be present here — otherwise the package would ship only
-      # the .d.ts stub and break in browsers.
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
-
       - run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          ROSETTA_REQUIRE_ALL_TARGETS: '1'

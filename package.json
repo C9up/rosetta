@@ -1,7 +1,7 @@
 {
   "name": "@c9up/rosetta",
   "version": "0.1.9",
-  "description": "Rosetta — dedicated i18n module for the Ream ecosystem",
+  "description": "Rosetta \u2014 dedicated i18n module for the Ream ecosystem",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,11 +11,9 @@
     "README.md",
     "benchmarks",
     "dist",
-    "index.*.node",
     "scripts",
     "src",
-    "stubs",
-    "wasm"
+    "stubs"
   ],
   "exports": {
     ".": {
@@ -62,18 +60,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "build:rust": "cargo build --release",
-    "build:napi": "cargo build --release && node scripts/copy-napi.mjs",
     "test": "vitest run",
-    "test:rust": "cargo test",
-    "test:napi": "node scripts/verify-napi.mjs",
     "test:browser": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs",
     "bench": "node benchmarks/rosetta.mjs",
     "lint": "biome check src/ tests/",
-    "build:wasm": "wasm-pack build --target web crates/rosetta-engine-wasm --out-dir ../../wasm",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs && pnpm build:wasm && node scripts/verify-wasm.mjs && node scripts/verify-package.mjs"
+    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs && node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

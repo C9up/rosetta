@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 
-import { isNativeAvailable, Rosetta } from "../dist/index.js";
+import { Rosetta } from "../dist/index.js";
 
 const manager = new Rosetta({
 	defaultLocale: "en",
@@ -52,7 +52,6 @@ bench("formatNumber", 50_000, (index) => locale.formatNumber(1_000 + index));
 console.log(
 	`Rosetta benchmark (${process.version}, ${process.platform}-${process.arch})`,
 );
-console.log(`N-API parser: ${isNativeAvailable() ? "enabled" : "disabled"}`);
 console.log("");
 for (const result of results) {
 	console.log(
