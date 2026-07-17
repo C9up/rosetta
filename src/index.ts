@@ -16,14 +16,31 @@ import {
 	type FileSystemLoaderOptions,
 } from "./loaders/FileSystemLoader.js";
 
+export type {
+	CatalogFinding,
+	CatalogFindingKind,
+	CheckCatalogsOptions,
+} from "./CatalogCheck.js";
+export {
+	checkCatalogs,
+	formatCatalogFindings,
+	runCatalogCheck,
+	suggestKey,
+	verifyCatalogs,
+} from "./CatalogCheck.js";
 export { Formatter } from "./formatters/Formatter.js";
 export type {
 	FormatterFactory,
+	MessageParam,
+	MessageParamKind,
 	NumberFormatOptions,
 	TimeFormatOptions,
 	TranslationsFormatterContract,
 } from "./formatters/IcuFormatter.js";
-export { IcuFormatter } from "./formatters/IcuFormatter.js";
+export {
+	extractMessageParams,
+	IcuFormatter,
+} from "./formatters/IcuFormatter.js";
 
 import {
 	type FormatterFactory,

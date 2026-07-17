@@ -114,6 +114,32 @@ canonical `t()` helper; the middleware writes the negotiated language to
 `ctx.locale`, which Inker reads per render. The Edge adapter remains exported
 from `@c9up/rosetta/plugins/edge` for Edge-compatible non-Ream hosts.
 
+## Checking Catalogs
+
+Catalogs drift silently: a key lands in `en` and is forgotten in `fr`, a
+variable is renamed in one locale only, a message is edited into invalid ICU.
+None of it fails until a user with that locale reaches that key. `checkCatalogs`
+reconciles every locale against a reference one and reports four kinds of drift
+— missing keys, orphan keys (with a `did you mean` for typos), ICU variables
+that disagree, and messages that no longer parse.
+
+```ts
+import { checkCatalogs, verifyCatalogs } from '@c9up/rosetta'
+
+const findings = checkCatalogs(i18nManager.getTranslations(), {
+  referenceLocale: 'en',
+})
+// [{ locale: 'fr', key: 'items', kind: 'param-mismatch',
+//    detail: "expects n:plural, but 'en' declares count:plural" }]
+
+// Boot guard — warns by default, `mode: 'throw'` to fail fast.
+verifyCatalogs(i18nManager.getTranslations(), { referenceLocale: 'en' })
+```
+
+`runCatalogCheck(translations, opts)` prints the report and returns an exit
+code, for a CI script. This has no `@adonisjs/i18n` equivalent — Adonis reports
+a missing translation at runtime, once the request is already being served.
+
 ## Reloading
 
 Translations are cached after boot. Reloading is atomic: a loader failure keeps

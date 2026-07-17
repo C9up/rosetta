@@ -63,6 +63,100 @@ type MessageNode =
 const messageAstCache = new Map<string, MessageNode[]>();
 
 /**
+ * How a message uses one of its variables. `text` means plain interpolation
+ * (`{name}`) — the value is stringified as-is, so it accepts anything.
+ */
+export type MessageParamKind =
+	| "text"
+	| "number"
+	| "date"
+	| "time"
+	| "plural"
+	| "selectordinal"
+	| "select";
+
+/** A variable a message requires, as declared by its ICU syntax. */
+export interface MessageParam {
+	name: string;
+	kind: MessageParamKind;
+	/** For `select` only: the declared branch keys, `other` excluded. */
+	options?: string[];
+}
+
+/**
+ * The variables a message needs, sorted by name so two messages can be
+ * compared directly. Parses through the shared cache, so calling this on a
+ * message that will also be formatted costs nothing extra.
+ *
+ * Powers translation-key typing and the cross-locale catalog check: `en` using
+ * `{count, plural, ...}` while `fr` uses `{n, plural, ...}` is a runtime
+ * "variable not provided" error waiting for whoever switches locale.
+ *
+ * @throws SyntaxError if the message is not valid ICU.
+ */
+export function extractMessageParams(message: string): MessageParam[] {
+	const found = new Map<string, MessageParam>();
+	collectParams(getMessageAst(message), found);
+	return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function collectParams(
+	nodes: MessageNode[],
+	found: Map<string, MessageParam>,
+): void {
+	for (const node of nodes) {
+		switch (node.type) {
+			case "text":
+			case "pound":
+				break;
+			case "argument":
+				addParam(found, { name: node.name, kind: "text" });
+				break;
+			case "number":
+				addParam(found, { name: node.name, kind: "number" });
+				break;
+			case "dateTime":
+				addParam(found, { name: node.name, kind: node.kind });
+				break;
+			case "plural":
+				addParam(found, {
+					name: node.name,
+					kind: node.ordinal ? "selectordinal" : "plural",
+				});
+				for (const branch of Object.values(node.options)) {
+					collectParams(branch, found);
+				}
+				break;
+			case "select":
+				addParam(found, {
+					name: node.name,
+					kind: "select",
+					options: Object.keys(node.options).filter((k) => k !== "other"),
+				});
+				for (const branch of Object.values(node.options)) {
+					collectParams(branch, found);
+				}
+				break;
+			default:
+				assertNever(node);
+		}
+	}
+}
+
+/**
+ * A name can appear more than once (`{n} of {n, plural, ...}`). The typed use
+ * is the constraining one, so it wins over bare interpolation; between two
+ * typed uses the first is kept, which only happens in a message that is already
+ * self-contradictory.
+ */
+function addParam(found: Map<string, MessageParam>, param: MessageParam): void {
+	const existing = found.get(param.name);
+	if (!existing || (existing.kind === "text" && param.kind !== "text")) {
+		found.set(param.name, param);
+	}
+}
+
+/**
  * Dependency-free ICU MessageFormat formatter backed by the runtime's ECMA-402
  * implementation. CLDR plural rules and value formatting therefore stay in
  * sync with Node/browser Intl instead of being maintained by hand.
