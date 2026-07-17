@@ -61,6 +61,30 @@ export type ParamsFor<K extends string> = K extends keyof TranslationKeys
 	: TranslationParams;
 
 /**
+ * The arguments that follow the key in `t()` / `formatMessage()`.
+ *
+ * Expressed as a tuple rather than overloads so a declared key can make its
+ * variables *mandatory*: with overloads, `t(key, fallbackMessage?)` always
+ * matches, so omitting the variables of a message that needs them still
+ * compiles. AdonisJS types the key as a bare `string`, so it cannot catch this
+ * — or a wrong key, or a wrong variable — at all.
+ *
+ * An undeclared key falls to the loose tuple, which is why an app that has not
+ * augmented {@link TranslationKeys} compiles exactly as before.
+ */
+export type TranslateArgs<K extends string> = K extends keyof TranslationKeys
+	? TranslationKeys[K] extends Record<string, never>
+		? [fallbackMessage?: string]
+		: [
+				params: TranslationKeys[K],
+				fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
+			]
+	: [
+			params?: TranslationParams | string,
+			fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
+		];
+
+/**
  * Payload passed to `onMissingTranslation`. Mirrors AdonisJS's
  * `i18n:missing:translation` event shape verbatim.
  */
@@ -241,23 +265,14 @@ export class RosettaLocale extends Formatter {
 		return this.hasMessage(key) || this.hasFallbackMessage(key);
 	}
 
-	t<K extends TranslationKey>(key: K, fallbackMessage?: string): string;
-	t<K extends TranslationKey>(
-		key: K,
-		params?: ParamsFor<K>,
-		fallbackMessage?: string,
-	): string;
-	/** Backward-compatible Rosetta options form. */
-	t<K extends TranslationKey>(
-		key: K,
-		params?: ParamsFor<K>,
-		options?: Omit<TranslateOptions, "locale">,
-	): string;
-	t(
-		key: string,
-		paramsOrFallback?: TranslationParams | string,
-		fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
-	): string {
+	/**
+	 * Translate a key. The second argument is the message's variables, or an
+	 * inline fallback message; the third is the fallback, or the Rosetta options
+	 * form. Once {@link TranslationKeys} is augmented, a key whose message needs
+	 * variables requires them, and a key whose message takes none rejects them.
+	 */
+	t<K extends TranslationKey>(key: K, ...rest: TranslateArgs<K>): string {
+		const [paramsOrFallback, fallbackOrOptions] = rest;
 		return this.#translate(key, paramsOrFallback, fallbackOrOptions);
 	}
 
@@ -297,23 +312,13 @@ export class RosettaLocale extends Formatter {
 		});
 	}
 
+	/** AdonisJS's long form of {@link t}, typed identically. */
 	formatMessage<K extends TranslationKey>(
 		identifier: K,
-		fallbackMessage?: string,
-	): string;
-	formatMessage<K extends TranslationKey>(
-		identifier: K,
-		data: ParamsFor<K>,
-		fallbackMessage?: string,
-	): string;
-	formatMessage(
-		identifier: string,
-		dataOrFallback?: TranslationParams | string,
-		fallbackMessage?: string,
+		...rest: TranslateArgs<K>
 	): string {
-		return typeof dataOrFallback === "string"
-			? this.#translate(identifier, dataOrFallback)
-			: this.#translate(identifier, dataOrFallback, fallbackMessage);
+		const [dataOrFallback, fallbackMessage] = rest;
+		return this.#translate(identifier, dataOrFallback, fallbackMessage);
 	}
 
 	formatRawMessage(message: string, data?: TranslationParams): string {

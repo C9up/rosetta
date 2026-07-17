@@ -149,16 +149,18 @@ declare module '@c9up/rosetta' {
 ```ts
 i18n.t('messages.greeting', { name: 'Hugo' })  // ok
 i18n.t('messages.greetingg', { name: 'Hugo' }) // error: unknown key
+i18n.t('messages.greeting', { nam: 'Hugo' })   // error: no such variable
 i18n.t('messages.items', { count: '2' })       // error: a plural takes a number
+i18n.t('messages.items')                       // error: `count` is required
+i18n.t('messages.plain', { count: 1 })         // error: takes no variables
 ```
 
 Until you generate that file, `TranslationKeys` is empty and `t()` accepts
 every string exactly as before — opting in is what turns the checks on.
 
-One limit worth knowing: `t('messages.items')` with the variables omitted still
-compiles, because `t(key, fallbackMessage?)` is a valid call. Typing catches
-wrong keys, wrong variable names and wrong types — not forgotten arguments.
-`checkCatalogs` covers the catalog side of the same class of bug.
+For reference, `@adonisjs/i18n@3.0.1` declares
+`t(identifier: string, data?: Record<string, any>, fallbackMessage?: string)`,
+so none of the six lines above is an error there.
 
 ## Checking Catalogs
 
