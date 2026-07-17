@@ -32,6 +32,7 @@ type CustomFormats = {
 };
 
 const MAX_NESTING_DEPTH = 100;
+const MAX_AST_NODES = 100_000;
 const MAX_AST_CACHE_ENTRIES = 1_000;
 const MAX_CACHED_MESSAGE_LENGTH = 16_384;
 const MAX_MESSAGE_LENGTH = 1_000_000;
@@ -112,13 +113,24 @@ export class IcuFormatter implements TranslationsFormatterContract {
 		locale: string,
 		data: Record<string, unknown> = {},
 	): string {
-		const ast = parseNativeMessage(message);
-		if (ast) return new MessageEvaluator(message, ast, locale, data).format();
-		return new MessageParser(message, locale, data).format();
+		return new MessageEvaluator(
+			message,
+			getMessageAst(message),
+			locale,
+			data,
+		).format();
 	}
 }
 
-function parseNativeMessage(message: string): MessageNode[] | null {
+/**
+ * Resolve a message to its AST, memoized. The native engine parses when a
+ * binary is loadable; otherwise the behaviour-equivalent TypeScript parser
+ * runs. Both tiers produce the same AST, feed the same evaluator, and populate
+ * the same cache — so a given message is parsed exactly once per process no
+ * matter which tier produced it. (Before, only the native tier was cached and
+ * the TypeScript fallback re-parsed on every single call.)
+ */
+function getMessageAst(message: string): MessageNode[] {
 	if (message.length > MAX_MESSAGE_LENGTH) {
 		throw new RangeError(
 			`ICU message exceeds the ${MAX_MESSAGE_LENGTH} character limit`,
@@ -126,11 +138,7 @@ function parseNativeMessage(message: string): MessageNode[] | null {
 	}
 	const cached = messageAstCache.get(message);
 	if (cached) return cached;
-	const serialized = nativeParseMessage(message);
-	if (serialized === null) return null;
-	const ast = JSON.parse(serialized) as MessageNode[];
-	if (!Array.isArray(ast))
-		throw new SyntaxError("Invalid ICU AST from native engine");
+	const ast = parseMessage(message);
 	if (message.length <= MAX_CACHED_MESSAGE_LENGTH) {
 		if (messageAstCache.size >= MAX_AST_CACHE_ENTRIES) {
 			const oldest = messageAstCache.keys().next().value;
@@ -138,6 +146,15 @@ function parseNativeMessage(message: string): MessageNode[] | null {
 		}
 		messageAstCache.set(message, ast);
 	}
+	return ast;
+}
+
+function parseMessage(message: string): MessageNode[] {
+	const serialized = nativeParseMessage(message);
+	if (serialized === null) return parseMessageToAst(message);
+	const ast = JSON.parse(serialized) as MessageNode[];
+	if (!Array.isArray(ast))
+		throw new SyntaxError("Invalid ICU AST from native engine");
 	return ast;
 }
 
@@ -219,153 +236,174 @@ function assertNever(value: never): never {
 	throw new TypeError(`Unsupported ICU AST node: ${JSON.stringify(value)}`);
 }
 
-class MessageParser {
-	constructor(
-		private readonly source: string,
-		private readonly locale: string,
-		private readonly data: Record<string, unknown>,
-	) {}
+/**
+ * Dependency-free TypeScript ICU parser. Mirrors the Rust `message_ast.rs`
+ * grammar node-for-node so both tiers emit an identical AST and the evaluator
+ * (and every error message) behaves the same whether or not a native binary
+ * loaded. Runs when no native engine is available — notably on musl/Alpine and
+ * any platform outside the prebuilt matrix.
+ */
+function parseMessageToAst(message: string): MessageNode[] {
+	return parseSegmentToAst(message, 0, { nodes: 0 });
+}
 
-	format(): string {
-		return this.#formatSegment(this.source);
+interface AstParseState {
+	nodes: number;
+}
+
+function pushAstNode(
+	nodes: MessageNode[],
+	node: MessageNode,
+	state: AstParseState,
+): void {
+	state.nodes += 1;
+	if (state.nodes > MAX_AST_NODES) {
+		throw new RangeError(
+			`ICU message exceeds the ${MAX_AST_NODES} AST node limit`,
+		);
 	}
+	nodes.push(node);
+}
 
-	#formatSegment(segment: string, poundValue?: number, depth = 0): string {
-		if (depth > MAX_NESTING_DEPTH) {
-			throw new RangeError(
-				`ICU message exceeds ${MAX_NESTING_DEPTH} nesting levels`,
-			);
+/** Flush the pending literal run as one text node (Rust coalesces the same way). */
+function flushAstText(
+	nodes: MessageNode[],
+	text: string,
+	state: AstParseState,
+): string {
+	if (text) pushAstNode(nodes, { type: "text", value: text }, state);
+	return "";
+}
+
+function parseSegmentToAst(
+	source: string,
+	depth: number,
+	state: AstParseState,
+): MessageNode[] {
+	if (depth > MAX_NESTING_DEPTH) {
+		throw new RangeError(
+			`ICU message exceeds ${MAX_NESTING_DEPTH} nesting levels`,
+		);
+	}
+	const nodes: MessageNode[] = [];
+	let text = "";
+	let index = 0;
+	while (index < source.length) {
+		const char = source[index];
+		if (char === "'") {
+			const quoted = consumeQuote(source, index);
+			text += quoted.value;
+			index = quoted.next;
+			continue;
 		}
-		let output = "";
-		for (let index = 0; index < segment.length; ) {
-			const char = segment[index];
-			if (char === "'") {
-				const quoted = consumeQuote(segment, index);
-				output += quoted.value;
-				index = quoted.next;
-				continue;
-			}
-			if (char === "{") {
-				const end = findMatchingBrace(segment, index);
-				if (end < 0) {
-					throw new SyntaxError(
-						`Unclosed ICU argument in message: ${this.source}`,
-					);
-				}
-				output += this.#formatArgument(
-					segment.slice(index + 1, end),
-					poundValue,
-					depth + 1,
-				);
-				index = end + 1;
-				continue;
-			}
-			if (char === "}") {
-				throw new SyntaxError(
-					`Unexpected ICU closing brace in message: ${this.source}`,
-				);
-			}
-			if (char === "#" && poundValue !== undefined) {
-				output += getNumberFormatter(this.locale).format(poundValue);
-				index++;
-				continue;
-			}
-			output += char;
+		if (char === "{") {
+			text = flushAstText(nodes, text, state);
+			const end = findMatchingBrace(source, index);
+			if (end < 0) throw new SyntaxError("Unclosed ICU argument");
+			pushAstNode(
+				nodes,
+				parseArgumentToAst(source.slice(index + 1, end), depth + 1, state),
+				state,
+			);
+			index = end + 1;
+			continue;
+		}
+		if (char === "}") throw new SyntaxError("Unexpected ICU closing brace");
+		if (char === "#") {
+			text = flushAstText(nodes, text, state);
+			pushAstNode(nodes, { type: "pound" }, state);
 			index++;
+			continue;
 		}
-		return output;
+		text += char;
+		index++;
 	}
+	flushAstText(nodes, text, state);
+	return nodes;
+}
 
-	#formatArgument(
-		content: string,
-		poundValue: number | undefined,
-		depth: number,
-	): string {
-		const parts = splitTopLevel(content, ",");
-		const identifier = parts[0]?.trim();
-		if (!identifier) {
-			throw new SyntaxError(`Empty ICU argument in message: ${this.source}`);
+function parseArgumentToAst(
+	content: string,
+	depth: number,
+	state: AstParseState,
+): MessageNode {
+	const parts = splitTopLevel(content, ",");
+	const name = parts[0]?.trim();
+	if (!name) throw new SyntaxError("Empty ICU argument");
+	if (parts.length === 1) return { type: "argument", name };
+
+	const kind = parts[1]?.trim();
+	const style = parts.slice(2).join(",").trim();
+	switch (kind) {
+		case "select": {
+			// `offset:` is plural-only — for select it must parse as a plain option
+			// key (and therefore fail), exactly as the Rust grammar does.
+			const { options } = parseOptions(style, false);
+			const parsed = parseOptionNodes(options, depth, state);
+			requireOtherOption(parsed, "select");
+			return { type: "select", name, options: parsed };
 		}
-		const value = this.#value(identifier);
-		if (parts.length === 1) return stringifyValue(value);
-
-		const type = parts[1]?.trim();
-		const style = parts.slice(2).join(",").trim();
-		switch (type) {
-			case "select":
-				return this.#formatSelect(String(value), style, poundValue, depth);
-			case "plural":
-				return this.#formatPlural(value, style, false, depth);
-			case "selectordinal":
-				return this.#formatPlural(value, style, true, depth);
-			case "number":
-				return this.#formatNumber(value, style);
-			case "date":
-			case "time":
-				return this.#formatDate(value, style, type);
-			default:
-				throw new SyntaxError(`Unsupported ICU argument type '${type}'`);
+		case "plural":
+		case "selectordinal": {
+			const { options, offset } = parseOptions(style, true);
+			const parsed = parseOptionNodes(options, depth, state);
+			requireOtherOption(parsed, kind);
+			return {
+				type: "plural",
+				name,
+				options: parsed,
+				offset,
+				ordinal: kind === "selectordinal",
+			};
 		}
+		case "number":
+			validateNumberStyle(style);
+			return { type: "number", name, style };
+		case "date":
+		case "time":
+			validateDateStyle(style, kind);
+			return { type: "dateTime", name, style, kind };
+		default:
+			throw new SyntaxError(`Unsupported ICU argument type '${kind}'`);
 	}
+}
 
-	#value(identifier: string): unknown {
-		if (!Object.hasOwn(this.data, identifier)) {
-			throw new Error(
-				`The ICU variable '${identifier}' was not provided for message '${this.source}'`,
-			);
-		}
-		return this.data[identifier];
+function parseOptionNodes(
+	options: Map<string, string>,
+	depth: number,
+	state: AstParseState,
+): Record<string, MessageNode[]> {
+	const parsed: Record<string, MessageNode[]> = Object.create(null);
+	for (const [key, body] of options) {
+		parsed[key] = parseSegmentToAst(body, depth, state);
 	}
+	return parsed;
+}
 
-	#formatSelect(
-		value: string,
-		style: string,
-		poundValue: number | undefined,
-		depth: number,
-	): string {
-		const { options } = parseOptions(style);
-		if (!options.has("other")) {
-			throw new SyntaxError("ICU select arguments require an 'other' option");
-		}
-		const selected = options.get(value) ?? options.get("other");
-		if (selected === undefined)
-			throw new SyntaxError("Invalid ICU select argument");
-		return this.#formatSegment(selected, poundValue, depth);
+function requireOtherOption(
+	options: Record<string, MessageNode[]>,
+	kind: string,
+): void {
+	if (!Object.hasOwn(options, "other")) {
+		throw new SyntaxError(`ICU ${kind} arguments require an 'other' option`);
 	}
+}
 
-	#formatPlural(
-		value: unknown,
-		style: string,
-		ordinal: boolean,
-		depth: number,
-	): string {
-		const number = toFiniteNumber(value);
-		const { options, offset } = parseOptions(style);
-		if (!options.has("other")) {
-			throw new SyntaxError("ICU plural arguments require an 'other' option");
-		}
-		const exact = options.get(`=${canonicalNumber(number)}`);
-		const adjusted = number - offset;
-		const selected =
-			exact ??
-			options.get(
-				getPluralRules(this.locale, {
-					type: ordinal ? "ordinal" : "cardinal",
-				}).select(adjusted),
-			) ??
-			options.get("other");
-		if (selected === undefined)
-			throw new SyntaxError("Invalid ICU plural argument");
-		return this.#formatSegment(selected, adjusted, depth);
-	}
+/**
+ * Validate a number style at parse time — but ONLY skeletons (`::…`). Plain
+ * styles (`integer`, `percent`, `currency/USD`) and caller-registered custom
+ * format keys are resolved at format time against `IcuFormatter.customFormats`,
+ * which the parser cannot see. Mirrors Rust's `validate_number_style`.
+ */
+function validateNumberStyle(style: string): void {
+	if (!style.startsWith("::")) return;
+	parseNumberSkeleton(style);
+}
 
-	#formatNumber(value: unknown, style: string): string {
-		return formatIcuNumber(value, style, this.locale);
-	}
-
-	#formatDate(value: unknown, style: string, type: "date" | "time"): string {
-		return formatIcuDate(value, style, type, this.locale);
-	}
+/** Skeleton-only date/time validation — see {@link validateNumberStyle}. */
+function validateDateStyle(style: string, kind: "date" | "time"): void {
+	if (!style.startsWith("::")) return;
+	parseDateStyle(style, kind);
 }
 
 function formatIcuNumber(
@@ -450,7 +488,15 @@ function splitTopLevel(source: string, separator: string): string[] {
 	return parts;
 }
 
-function parseOptions(source: string): {
+/**
+ * @param allowOffset `offset:` is plural-only. For `select`, Rust's grammar
+ *   never looks for it, so `offset:2` there falls through to the option-key
+ *   branch and raises the same "invalid option list" error. Keep it false.
+ */
+function parseOptions(
+	source: string,
+	allowOffset = true,
+): {
 	options: Map<string, string>;
 	offset: number;
 } {
@@ -461,7 +507,7 @@ function parseOptions(source: string): {
 	let index = 0;
 	while (index < source.length) {
 		while (/\s/.test(source[index] ?? "")) index++;
-		if (source.startsWith("offset:", index)) {
+		if (allowOffset && source.startsWith("offset:", index)) {
 			if (sawOffset) throw new SyntaxError("Duplicate ICU plural offset");
 			if (sawOption) {
 				throw new SyntaxError("ICU plural offset must precede all options");
