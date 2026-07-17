@@ -94,12 +94,12 @@ describe("rosetta > Rosetta > resolveLocale (Accept-Language)", () => {
 		expect(r.resolveLocale("zh-CN")).toBe("zh-cn");
 	});
 
-	it("ignores invalid q-values silently (defaults to 1)", () => {
+	it("discards preferences with invalid q-values", () => {
 		const r = new Rosetta({
 			defaultLocale: "en",
 			supportedLocales: ["en", "fr"],
 		});
-		expect(r.resolveLocale("fr;q=NaN, en;q=0.5")).toBe("fr");
+		expect(r.resolveLocale("fr;q=NaN, en;q=0.5")).toBe("en");
 	});
 });
 

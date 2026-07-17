@@ -25,3 +25,7 @@ export function translate(
 ): string;
 
 export function has(catalogsJson: string, key: string, chainJson: string): boolean;
+
+export function parse_message(message: string): string;
+
+export function parse_catalog(input: string, format: string): string;

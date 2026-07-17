@@ -1,20 +1,18 @@
-/**
- * @c9up/rosetta — framework-agnostic internationalization module.
- */
+/** Browser/WASM entry point. It contains no eager Node.js builtin imports. */
 
 export type {
 	FileSystemLoaderOptions,
 	FsLoaderOptions,
-} from "./loaders/FileSystemLoader.js";
+} from "./loaders/BrowserFileSystemLoader.js";
 export {
 	FileSystemLoader,
 	FileSystemLoader as FsLoader,
-} from "./loaders/FileSystemLoader.js";
+} from "./loaders/BrowserFileSystemLoader.js";
 
 import {
 	FileSystemLoader,
 	type FileSystemLoaderOptions,
-} from "./loaders/FileSystemLoader.js";
+} from "./loaders/BrowserFileSystemLoader.js";
 
 export type {
 	FormatterFactory,
@@ -55,6 +53,7 @@ export type {
 	TranslationsLoaderContract,
 	ValidationFieldContext,
 } from "./Rosetta.js";
+export type { RosettaProviderConfig } from "./RosettaProvider.js";
 export type { I18nReplContext, I18nReplLike } from "./repl.js";
 export { registerReplBindings } from "./repl.js";
 
@@ -68,29 +67,18 @@ export {
 	RosettaLocale,
 	RosettaLocale as I18n,
 } from "./Rosetta.js";
-export type { RosettaProviderConfig } from "./RosettaProvider.js";
 
-import type { RosettaProviderConfig } from "./RosettaProvider.js";
-
-/**
- * Author-time config helper for `config/i18n.ts` — AdonisJS i18n `defineConfig`
- * parity. Identity at runtime; the generic preserves literal types for inference.
- */
 export interface ResolvableConfig<T> {
 	resolver(app: unknown): Promise<T>;
 }
 
 type ConfigValue<T> = T | ResolvableConfig<T>;
 
-export type DefinedI18nConfig = Omit<
-	RosettaProviderConfig,
-	"defaultLocale" | "formatter" | "loaders"
-> &
-	I18nManagerConfig &
+export type DefinedI18nConfig = I18nManagerConfig &
 	ResolvableConfig<I18nManagerConfig>;
 
 export function defineConfig(
-	config: Omit<RosettaProviderConfig, "formatter" | "loaders"> & {
+	config: Partial<Omit<I18nManagerConfig, "formatter" | "loaders">> & {
 		formatter: ConfigValue<FormatterFactory>;
 		loaders?: ConfigValue<LoaderFactory>[];
 	},
@@ -135,14 +123,12 @@ function withResolver<T extends object>(value: T): T & ResolvableConfig<T> {
 	return value as T & ResolvableConfig<T>;
 }
 
-/** AdonisJS-compatible formatter factories. */
 export const formatters = {
 	icu(): FormatterFactory & ResolvableConfig<FormatterFactory> {
 		return withResolver(() => new IcuFormatter());
 	},
 };
 
-/** AdonisJS-compatible loader factories. */
 export const loaders = {
 	fs(
 		config: FileSystemLoaderOptions,

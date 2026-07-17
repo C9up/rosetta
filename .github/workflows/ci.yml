@@ -37,6 +37,10 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
       - run: pnpm lint
+      - run: pnpm test:browser
+      # A clean checkout has no .node artifact, so this also exercises the
+      # dependency-free TypeScript fallback instead of only the native path.
+      - run: pnpm test
   # 5-platform NAPI matrix. rosetta is fully self-contained: its runtime and
   # test suite have zero @c9up dependencies, so it builds and tests standalone
   # with no workspace stub. darwin-x64 is cross-compiled on an arm64 runner
@@ -71,6 +75,10 @@ jobs:
         run: pnpm build:napi
         env:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
+
+      - name: Verify NAPI exports
+        if: matrix.test
+        run: pnpm test:napi
 
       - name: Vitest (JSON reporter)
         if: matrix.test
@@ -124,12 +132,16 @@ jobs:
           if-no-files-found: error
 
   cargo-tests:
-    name: Cargo tests (linux-x64-gnu)
+    name: Cargo quality (linux-x64-gnu + wasm32)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo check -p rosetta-engine-wasm --target wasm32-unknown-unknown
 
   # Publish job — gated on workflow_dispatch (manual maintainer trigger).
   # Requires NPM_TOKEN secret + a v<MAJOR>.<MINOR>.<PATCH> tag at HEAD matching
@@ -255,3 +267,4 @@ jobs:
       - run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          ROSETTA_REQUIRE_ALL_TARGETS: '1'

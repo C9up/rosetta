@@ -1,0 +1,10 @@
+import DetectUserLocaleMiddleware from '@c9up/rosetta/middleware'
+import type { RosettaLocale } from '@c9up/rosetta'
+
+export default class extends DetectUserLocaleMiddleware {}
+
+declare module '@c9up/ream' {
+  export interface HttpContext {
+    i18n: RosettaLocale
+  }
+}

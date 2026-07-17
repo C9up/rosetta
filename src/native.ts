@@ -27,6 +27,8 @@ interface NativeModule {
 		defaultValue: string | undefined,
 	) => string;
 	has: (catalogsJson: string, key: string, chainJson: string) => boolean;
+	parseMessage?: (message: string) => string;
+	parseCatalog?: (input: string, format: string) => string;
 }
 
 let native: NativeModule | undefined;
@@ -39,6 +41,8 @@ interface WasmStatelessApi {
 		defaultValue: string | undefined,
 	): string;
 	has(catalogsJson: string, key: string, chainJson: string): boolean;
+	parse_message?: (message: string) => string;
+	parse_catalog?: (input: string, format: string) => string;
 }
 let wasmModule: WasmStatelessApi | undefined;
 let loadError: unknown;
@@ -170,4 +174,21 @@ export function nativeHas(
 		`[ROSETTA_ENGINE_NOT_FOUND] ${loadError ?? "binary not found"}`,
 		{ cause: loadError },
 	);
+}
+
+/** Parse ICU syntax in Rust when the current native/WASM build exposes it. */
+export function nativeParseMessage(message: string): string | null {
+	if (native?.parseMessage) return native.parseMessage(message);
+	if (wasmModule?.parse_message) return wasmModule.parse_message(message);
+	return null;
+}
+
+/** Parse a translation catalog in Rust when the native/WASM engine is loaded. */
+export function nativeParseCatalog(
+	input: string,
+	format: "json" | "yaml" | "yml",
+): string | null {
+	if (native?.parseCatalog) return native.parseCatalog(input, format);
+	if (wasmModule?.parse_catalog) return wasmModule.parse_catalog(input, format);
+	return null;
 }

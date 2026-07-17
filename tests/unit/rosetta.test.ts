@@ -8,6 +8,20 @@ import type { MessageTree } from "../../src/Rosetta.js";
 import { Rosetta } from "../../src/Rosetta.js";
 
 describe("rosetta", () => {
+	it("keeps request-scoped catalog views current after messages are replaced", () => {
+		const manager = new Rosetta({ defaultLocale: "en", fallbackLocale: "fr" })
+			.loadMessages("en", { existing: "Existing" })
+			.loadMessages("fr", { fallback: "Fallback" });
+		const scoped = manager.locale("en");
+
+		manager.loadMessages("en", { added: "Added" });
+		manager.loadMessages("fr", { lateFallback: "Late fallback" });
+
+		expect(scoped.hasMessage("added")).toBe(true);
+		expect(scoped.hasFallbackMessage("lateFallback")).toBe(true);
+		expect(scoped.resolveIdentifier("added")?.message).toBe("Added");
+	});
+
 	it("exposes native availability flag", () => {
 		expect(typeof isNativeAvailable()).toBe("boolean");
 	});
@@ -361,6 +375,13 @@ describe("rosetta — adonis i18n parity", () => {
 		);
 	});
 
+	it("formatDisplayNames honors Intl fallback none", () => {
+		const i18n = new Rosetta({ defaultLocale: "en" });
+		expect(
+			i18n.formatDisplayNames("ZZZ", { type: "currency", fallback: "none" }),
+		).toBeUndefined();
+	});
+
 	// Gap 4 — currency options-bag + legacy alias
 	it("formatCurrency accepts the Adonis options bag", () => {
 		const i18n = new Rosetta({ defaultLocale: "en" });
@@ -395,19 +416,17 @@ describe("rosetta — adonis i18n parity", () => {
 		expect(i18n.getSupportedLocaleFor(["de", "fr"])).toBe("de");
 	});
 
-	// Gap 8 — locale getter + immutable switchLocale on the request instance
-	it("RosettaLocale exposes a locale getter and immutable switchLocale", () => {
+	// Adonis I18n mutates the request-scoped instance when switching locale.
+	it("RosettaLocale exposes a locale getter and mutable switchLocale", () => {
 		const i18n = new Rosetta({ defaultLocale: "en" })
 			.loadMessages("en", { greeting: "Hello" })
 			.loadMessages("fr", { greeting: "Bonjour" });
 
 		const en = i18n.locale("en");
 		expect(en.locale).toBe("en");
-		const fr = en.switchLocale("fr");
-		expect(fr.locale).toBe("fr");
-		// original instance is untouched (immutable)
-		expect(en.locale).toBe("en");
-		expect(fr.t("greeting")).toBe("Bonjour");
+		en.switchLocale("fr");
+		expect(en.locale).toBe("fr");
+		expect(en.t("greeting")).toBe("Bonjour");
 	});
 
 	// Gap 9 — supportedLocales() inference

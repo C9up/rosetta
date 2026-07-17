@@ -1,39 +1,29 @@
 import {
-	createNativeEngine,
-	getLoadError,
-	type NativeRosettaEngine,
-} from "./native.js";
+	type FormatterFactory,
+	IcuFormatter,
+	type TranslationsFormatterContract,
+} from "./formatters/IcuFormatter.js";
+import {
+	getDateTimeFormatter,
+	getDisplayNamesFormatter,
+	getListFormatter,
+	getNumberFormatter,
+	getPluralRules,
+	getRelativeTimeFormatter,
+} from "./formatters/IntlFormatterCache.js";
+import { createLocaleStorage } from "./locale-storage.js";
 
-/**
- * Build the "engine unavailable" error, surfacing the REAL load failure as the
- * cause instead of a Node-only "build:napi" message that misleads browser/WASM
- * users (audit 2026-06-13).
- */
-function nativeEngineRequiredError(): Error {
-	const loadError = getLoadError();
-	const detail =
-		loadError !== undefined
-			? ` Underlying load failure: ${loadError instanceof Error ? loadError.message : String(loadError)}.`
-			: "";
-	return new Error(
-		"[ROSETTA_NAPI_REQUIRED] The Rosetta ICU engine failed to load. In Node, build the " +
-			"native binary (`cd packages/rosetta && pnpm build:napi`); in the browser, ensure the " +
-			`WASM build is bundled.${detail}`,
-		loadError !== undefined ? { cause: loadError } : undefined,
-	);
-}
-
-export type TranslationParams = Record<
-	string,
-	string | number | boolean | Date | null | undefined
->;
+export type TranslationParams = Record<string, unknown>;
 export type MessageValue = string | number | boolean | null;
 export type MessageTree = { [key: string]: MessageValue | MessageTree };
 export type MessageCatalog = Record<string, string>;
+export type Translations = Record<string, MessageCatalog>;
 
 export interface TranslateOptions {
 	locale?: string;
 	defaultValue?: string;
+	/** Pre-resolved fallback used by locale-scoped instances. */
+	fallbackLocale?: string;
 }
 
 /**
@@ -50,14 +40,31 @@ export type MissingTranslationHandler = (
 	payload: MissingTranslationEventPayload,
 ) => void;
 
+export interface MissingTranslationEmitter {
+	emit(
+		event: "i18n:missing:translation",
+		payload: MissingTranslationEventPayload,
+	): unknown;
+}
+
 /**
  * Options bag for `formatCurrency`, aligned with AdonisJS's
  * `CurrencyFormatOptions` (a `NumberFormatOptions` that always carries a
  * `currency`).
  */
-export type CurrencyFormatOptions = Intl.NumberFormatOptions & {
+export type CurrencyFormatOptions = Omit<
+	Intl.NumberFormatOptions,
+	"style" | "unit" | "unitDisplay"
+> & {
 	currency: string;
 };
+
+export type DateTimeValue =
+	| Date
+	| number
+	| string
+	| { toJSDate(): Date }
+	| { toMillis(): number };
 
 export interface LocaleResolverInput {
 	header?: string | null;
@@ -70,13 +77,22 @@ export interface RosettaLoader {
 	): Promise<MessageTree | MessageCatalog | null | undefined>;
 }
 
+export interface TranslationsLoaderContract {
+	load(): Promise<Record<string, MessageTree | MessageCatalog>>;
+	loadAll?(): Promise<Record<string, MessageTree | MessageCatalog>>;
+}
+
+export type Loader = RosettaLoader | TranslationsLoaderContract;
+export type LoaderFactory = (config: RosettaOptions) => Loader;
+
 export interface RosettaOptions {
 	defaultLocale?: string;
 	supportedLocales?: string[];
 	fallbackLocale?: string;
 	fallbackLocales?: Record<string, string>;
 	messages?: Record<string, MessageTree | MessageCatalog>;
-	loaders?: RosettaLoader[];
+	loaders?: Array<Loader | LoaderFactory>;
+	formatter?: TranslationsFormatterContract | FormatterFactory;
 
 	/**
 	 * Called when `t()` cannot resolve an identifier in the requested
@@ -97,6 +113,19 @@ export interface RosettaOptions {
 	 * inline `defaultValue` (passed to `t()`) still wins over this.
 	 */
 	fallback?: (identifier: string, locale: string) => string;
+}
+
+export interface BaseI18nConfig {
+	defaultLocale: string;
+	supportedLocales?: string[];
+	fallbackLocales?: Record<string, string>;
+	fallback?: (identifier: string, locale: string) => string;
+}
+
+export interface I18nManagerConfig extends RosettaOptions {
+	defaultLocale: string;
+	formatter: FormatterFactory;
+	loaders: LoaderFactory[];
 }
 
 /**
@@ -122,10 +151,43 @@ const DEFAULT_LOCALE = "en";
 export class RosettaLocale {
 	#manager: Rosetta;
 	#locale: string;
+	#emitter?: MissingTranslationEmitter;
+	fallbackLocale: string;
 
-	constructor(manager: Rosetta, locale: string) {
-		this.#manager = manager;
-		this.#locale = locale;
+	constructor(
+		manager: Rosetta,
+		locale: string,
+		emitter?: MissingTranslationEmitter,
+	);
+	/** AdonisJS-compatible constructor. */
+	constructor(
+		locale: string,
+		emitter: MissingTranslationEmitter,
+		manager: Rosetta,
+	);
+	constructor(
+		managerOrLocale: Rosetta | string,
+		localeOrEmitter: string | MissingTranslationEmitter,
+		emitterOrManager?: MissingTranslationEmitter | Rosetta,
+	) {
+		if (typeof managerOrLocale === "string") {
+			this.#locale = normalizeLocale(managerOrLocale);
+			this.#emitter = localeOrEmitter as MissingTranslationEmitter;
+			this.#manager = emitterOrManager as Rosetta;
+		} else {
+			this.#manager = managerOrLocale;
+			this.#locale = normalizeLocale(localeOrEmitter as string);
+			this.#emitter = emitterOrManager as MissingTranslationEmitter | undefined;
+		}
+		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.#locale);
+	}
+
+	get localeTranslations(): MessageCatalog {
+		return this.#manager.getTranslationsFor(this.#locale);
+	}
+
+	get fallbackTranslations(): MessageCatalog {
+		return this.#manager.getTranslationsFor(this.fallbackLocale);
 	}
 
 	getLocale(): string {
@@ -137,40 +199,116 @@ export class RosettaLocale {
 		return this.#locale;
 	}
 
-	/**
-	 * AdonisJS parity, adapted to Rosetta's immutability: `RosettaLocale` is
-	 * request-scoped and immutable, so this returns a NEW instance bound to
-	 * `locale` instead of mutating in place (Adonis mutates the instance).
-	 */
-	switchLocale(locale: string): RosettaLocale {
-		return this.#manager.locale(locale);
+	/** Switch this request-scoped instance in place, matching AdonisJS I18n. */
+	switchLocale(locale: string): void {
+		this.#locale = normalizeLocale(locale);
+		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.#locale);
+	}
+
+	resolveIdentifier(
+		identifier: string,
+	): { message: string; isFallback: boolean } | null {
+		const local = this.localeTranslations[identifier];
+		if (local !== undefined) return { message: local, isFallback: false };
+		const fallback = this.fallbackTranslations[identifier];
+		return fallback !== undefined
+			? { message: fallback, isFallback: true }
+			: null;
+	}
+
+	hasMessage(identifier: string): boolean {
+		return this.localeTranslations[identifier] !== undefined;
+	}
+
+	hasFallbackMessage(identifier: string): boolean {
+		return this.fallbackTranslations[identifier] !== undefined;
 	}
 
 	has(key: string): boolean {
-		return this.#manager.has(key, this.#locale);
+		return this.hasMessage(key) || this.hasFallbackMessage(key);
 	}
 
+	t(key: string, fallbackMessage?: string): string;
+	t(key: string, params?: TranslationParams, fallbackMessage?: string): string;
+	/** Backward-compatible Rosetta options form. */
 	t(
 		key: string,
 		params?: TranslationParams,
 		options?: Omit<TranslateOptions, "locale">,
+	): string;
+	t(
+		key: string,
+		paramsOrFallback?: TranslationParams | string,
+		fallbackOrOptions?: string | Omit<TranslateOptions, "locale">,
 	): string {
-		return this.#manager.t(key, params, { ...options, locale: this.#locale });
+		const params =
+			typeof paramsOrFallback === "string" ? undefined : paramsOrFallback;
+		const inlineFallback =
+			typeof paramsOrFallback === "string"
+				? paramsOrFallback
+				: typeof fallbackOrOptions === "string"
+					? fallbackOrOptions
+					: fallbackOrOptions?.defaultValue;
+		if (this.#emitter) {
+			const resolved = this.resolveIdentifier(key);
+			if (!resolved || resolved.isFallback) {
+				this.#emitter.emit("i18n:missing:translation", {
+					locale: this.#locale,
+					identifier: key,
+					hasFallback: resolved?.isFallback ?? false,
+				});
+			}
+		}
+		return this.#manager.t(key, params, {
+			locale: this.#locale,
+			defaultValue: inlineFallback,
+			fallbackLocale: this.fallbackLocale,
+		});
 	}
 
-	formatNumber(value: number, options?: Intl.NumberFormatOptions): string {
+	formatMessage(identifier: string, fallbackMessage?: string): string;
+	formatMessage(
+		identifier: string,
+		data: TranslationParams,
+		fallbackMessage?: string,
+	): string;
+	formatMessage(
+		identifier: string,
+		dataOrFallback?: TranslationParams | string,
+		fallbackMessage?: string,
+	): string {
+		return typeof dataOrFallback === "string"
+			? this.t(identifier, dataOrFallback)
+			: this.t(identifier, dataOrFallback, fallbackMessage);
+	}
+
+	formatRawMessage(message: string, data?: TranslationParams): string {
+		return this.#manager.formatRawMessage(message, this.#locale, data);
+	}
+
+	createMessagesProvider(prefix = "validator.shared"): I18nMessagesProvider {
+		return new I18nMessagesProvider(prefix, this);
+	}
+
+	formatNumber(
+		value: string | number | bigint,
+		options?: Intl.NumberFormatOptions,
+	): string {
 		return this.#manager.formatNumber(value, options, this.#locale);
 	}
 
-	formatCurrency(value: number, options: CurrencyFormatOptions): string;
+	formatCurrency(
+		value: string | number | bigint,
+		options: CurrencyFormatOptions,
+	): string;
 	/** @deprecated Prefer the options-bag form `formatCurrency(value, { currency })`. */
 	formatCurrency(
-		value: number,
+		value: string | number | bigint,
 		currency: string,
 		options?: Intl.NumberFormatOptions,
 	): string;
 	formatCurrency(
-		value: number,
+		value: string | number | bigint,
 		optionsOrCurrency: string | CurrencyFormatOptions,
 		options?: Intl.NumberFormatOptions,
 	): string {
@@ -186,21 +324,21 @@ export class RosettaLocale {
 	}
 
 	formatDate(
-		value: Date | number | string,
+		value: DateTimeValue,
 		options?: Intl.DateTimeFormatOptions,
 	): string {
 		return this.#manager.formatDate(value, options, this.#locale);
 	}
 
 	formatTime(
-		value: Date | number | string,
+		value: DateTimeValue,
 		options?: Intl.DateTimeFormatOptions,
 	): string {
 		return this.#manager.formatTime(value, options, this.#locale);
 	}
 
 	formatRelativeTime(
-		value: Date | string | number,
+		value: DateTimeValue,
 		unit: Intl.RelativeTimeFormatUnit | "auto",
 		options?: Intl.RelativeTimeFormatOptions,
 	): string {
@@ -218,7 +356,10 @@ export class RosettaLocale {
 		return this.#manager.formatList(list, options, this.#locale);
 	}
 
-	formatDisplayNames(code: string, options: Intl.DisplayNamesOptions): string {
+	formatDisplayNames(
+		code: string,
+		options: Intl.DisplayNamesOptions,
+	): string | undefined {
 		return this.#manager.formatDisplayNames(code, options, this.#locale);
 	}
 
@@ -234,32 +375,141 @@ export class RosettaLocale {
 	}
 }
 
+export interface ValidationFieldContext {
+	name: string | number;
+	wildCardPath: string;
+}
+
+/** VineJS-compatible messages provider without a runtime Vine dependency. */
+export class I18nMessagesProvider {
+	readonly #messagesPrefix: string;
+	readonly #fieldsPrefix: string;
+
+	constructor(
+		prefix: string,
+		private readonly i18n: RosettaLocale,
+	) {
+		this.#messagesPrefix = `${prefix}.messages`;
+		this.#fieldsPrefix = `${prefix}.fields`;
+	}
+
+	/** Adonis/Vine contract. */
+	getMessage(
+		defaultMessage: string,
+		rule: string,
+		field: ValidationFieldContext | string,
+		meta?: Record<string, unknown>,
+	): string;
+	/** Backward-compatible Rosetta 0.1 two-argument form. */
+	getMessage(field: string, rule: string): string;
+	getMessage(
+		defaultMessageOrField: string,
+		rule: string,
+		field?: ValidationFieldContext | string,
+		meta: Record<string, unknown> = {},
+	): string {
+		const legacy = field === undefined;
+		const context: ValidationFieldContext =
+			typeof field === "object"
+				? field
+				: {
+						name: field ?? defaultMessageOrField,
+						wildCardPath: field ?? defaultMessageOrField,
+					};
+		const defaultMessage = legacy
+			? `${rule} validation failed for {field}`
+			: defaultMessageOrField;
+		const fieldName = this.translateField(context.name);
+
+		// Vine reuses this metadata in its serialized error, so matching Adonis
+		// requires translating these entries in place as well as in the message.
+		if (meta.otherField !== undefined) {
+			meta.otherField = this.translateField(meta.otherField as string | number);
+		}
+		if (meta.originalField !== undefined) {
+			meta.originalField = this.translateField(
+				meta.originalField as string | number,
+			);
+		}
+		const data = { field: fieldName, ...meta };
+		for (const identifier of [
+			`${this.#messagesPrefix}.${context.wildCardPath}.${rule}`,
+			`${this.#messagesPrefix}.${rule}`,
+		]) {
+			const message = this.i18n.resolveIdentifier(identifier);
+			if (message) return this.i18n.formatRawMessage(message.message, data);
+		}
+		return interpolateValidationMessage(defaultMessage, data);
+	}
+
+	translateField(name: string | number): string | number {
+		const message = this.i18n.resolveIdentifier(
+			`${this.#fieldsPrefix}.${name}`,
+		);
+		return message ? this.i18n.formatRawMessage(message.message) : name;
+	}
+}
+
+function interpolateValidationMessage(
+	message: string,
+	data: Record<string, unknown>,
+): string {
+	return message.replace(/\{\s*([\w.]+)\s*\}/g, (placeholder, path: string) => {
+		let value: unknown = data;
+		for (const segment of path.split(".")) {
+			if (
+				!value ||
+				typeof value !== "object" ||
+				!Object.hasOwn(value, segment)
+			) {
+				return placeholder;
+			}
+			value = (value as Record<string, unknown>)[segment];
+		}
+		return value === null || value === undefined ? "" : String(value);
+	});
+}
+
 /**
  * Rosetta i18n manager.
  *
  * Framework-agnostic with request-scoped locale instances.
  */
 export class Rosetta {
-	#messages: Map<string, MessageCatalog> = new Map();
-	#catalogsCache?: Record<string, MessageCatalog>;
-	#catalogsCacheDirty = true;
-	/** Stateful Rust engine (Story 37.9) — holds parsed catalogs in Rust memory. */
-	#nativeEngine: NativeRosettaEngine | null = createNativeEngine();
-	#locale: string;
+	#messages: Record<string, MessageCatalog> = Object.create(null);
+	#initialMessages: Record<string, MessageTree | MessageCatalog>;
+	#localeStorage = createLocaleStorage<string>();
 	#defaultLocale: string;
 	#fallbackLocale: string;
 	#fallbackLocales: Record<string, string>;
 	#supportedLocales?: Set<string>;
-	#loaders: RosettaLoader[];
+	#loaderEntries: Array<Loader | LoaderFactory>;
+	#formatter?: TranslationsFormatterContract;
+	#formatterFactory?: FormatterFactory;
+	#hasCachedTranslations = false;
+	#translationsLoadPromise?: Promise<void>;
 	#numberFormatDataCache: Map<string, NumberFormatData> = new Map();
-	#onMissingTranslation?: MissingTranslationHandler;
+	#missingTranslationHandlers: MissingTranslationHandler[] = [];
 	#fallback?: (identifier: string, locale: string) => string;
+	#emitter?: MissingTranslationEmitter;
+	readonly config: RosettaOptions;
 
-	constructor(options: RosettaOptions = {}) {
+	constructor(options?: RosettaOptions);
+	/** AdonisJS-compatible I18nManager constructor. */
+	constructor(emitter: MissingTranslationEmitter, config: I18nManagerConfig);
+	constructor(
+		optionsOrEmitter: RosettaOptions | MissingTranslationEmitter = {},
+		managerConfig?: I18nManagerConfig,
+	) {
+		const options = managerConfig ?? (optionsOrEmitter as RosettaOptions);
+		if (managerConfig) {
+			this.#emitter = optionsOrEmitter as MissingTranslationEmitter;
+		}
+		this.config = options;
+		this.#initialMessages = options.messages ?? {};
 		this.#defaultLocale = normalizeLocale(
 			options.defaultLocale ?? DEFAULT_LOCALE,
 		);
-		this.#locale = this.#defaultLocale;
 		this.#fallbackLocale = normalizeLocale(
 			options.fallbackLocale ?? this.#defaultLocale,
 		);
@@ -267,8 +517,13 @@ export class Rosetta {
 		this.#supportedLocales = options.supportedLocales
 			? new Set(options.supportedLocales.map(normalizeLocale))
 			: undefined;
-		this.#loaders = options.loaders ?? [];
-		this.#onMissingTranslation = options.onMissingTranslation;
+		this.#loaderEntries = options.loaders ?? [];
+		const formatter = options.formatter;
+		if (typeof formatter === "function") this.#formatterFactory = formatter;
+		else this.#formatter = formatter ?? new IcuFormatter();
+		if (options.onMissingTranslation) {
+			this.#missingTranslationHandlers.push(options.onMissingTranslation);
+		}
 		this.#fallback = options.fallback;
 
 		if (options.messages) {
@@ -279,24 +534,15 @@ export class Rosetta {
 	}
 
 	async boot(): Promise<void> {
-		if (!this.#supportedLocales || this.#loaders.length === 0) {
-			return;
-		}
-		for (const locale of this.#supportedLocales) {
-			await this.#loadFromLoaders(locale);
-		}
+		await this.loadTranslations();
 	}
 
-	locale(locale: string): RosettaLocale {
-		return new RosettaLocale(this, normalizeLocale(locale));
+	locale(locale = this.#defaultLocale): RosettaLocale {
+		return new RosettaLocale(this, normalizeLocale(locale), this.#emitter);
 	}
 
 	loadMessages(locale: string, messages: MessageTree | MessageCatalog): this {
-		const normalizedLocale = normalizeLocale(locale);
-		const existing = this.#messages.get(normalizedLocale) ?? {};
-		const flattened = flattenMessages(messages);
-		this.#messages.set(normalizedLocale, { ...existing, ...flattened });
-		this.#catalogsCacheDirty = true;
+		mergeMessagesInto(this.#messages, locale, messages);
 		return this;
 	}
 
@@ -306,12 +552,17 @@ export class Rosetta {
 	}
 
 	setLocale(locale: string): this {
-		this.#locale = normalizeLocale(locale);
+		this.#localeStorage.enterWith(normalizeLocale(locale));
 		return this;
 	}
 
 	getLocale(): string {
-		return this.#locale;
+		return this.#localeStorage.getStore() ?? this.#defaultLocale;
+	}
+
+	/** Run legacy manager-level helpers inside an isolated locale context. */
+	runWithLocale<T>(locale: string, callback: () => T): T {
+		return this.#localeStorage.run(normalizeLocale(locale), callback);
 	}
 
 	setDefaultLocale(locale: string): this {
@@ -353,17 +604,75 @@ export class Rosetta {
 		for (const key of Object.keys(this.#fallbackLocales)) {
 			inferred.add(key);
 		}
-		for (const locale of this.#messages.keys()) {
+		for (const locale of Object.keys(this.#messages)) {
 			inferred.add(locale);
 		}
 		return Array.from(inferred);
 	}
 
+	get defaultLocale(): string {
+		return this.#defaultLocale;
+	}
+
+	get hasCachedTranslations(): boolean {
+		return this.#hasCachedTranslations;
+	}
+
+	getTranslations(): Record<string, MessageCatalog> {
+		return this.#messages;
+	}
+
+	getTranslationsFor(locale: string): MessageCatalog {
+		return this.#messages[normalizeLocale(locale)] ?? {};
+	}
+
+	getFormatter(): TranslationsFormatterContract {
+		if (!this.#formatter) {
+			this.#formatter =
+				this.#formatterFactory?.(this.config) ?? new IcuFormatter();
+		}
+		return this.#formatter;
+	}
+
+	getFallbackLocaleFor(locale: string): string {
+		const normalized = normalizeLocale(locale);
+		const explicit = this.#fallbackLocales[normalized];
+		if (explicit) return explicit;
+		let closest:
+			| { locale: string; specificity: number; order: number }
+			| undefined;
+		for (const [order, candidate] of this.supportedLocales().entries()) {
+			const candidateLocale = normalizeLocale(candidate);
+			if (candidateLocale === normalized) continue;
+			const specificity = languageMatchSpecificity(normalized, candidateLocale);
+			if (specificity < 0) continue;
+			if (
+				!closest ||
+				specificity > closest.specificity ||
+				(specificity === closest.specificity && order < closest.order)
+			) {
+				closest = { locale: candidateLocale, specificity, order };
+			}
+		}
+		if (closest) return closest.locale;
+		return this.#fallbackLocale || this.#defaultLocale;
+	}
+
 	setOnMissingTranslation(
 		handler: MissingTranslationHandler | undefined,
 	): this {
-		this.#onMissingTranslation = handler;
+		this.#missingTranslationHandlers = handler ? [handler] : [];
 		return this;
+	}
+
+	onMissingTranslation(handler: MissingTranslationHandler): () => void {
+		this.#missingTranslationHandlers.push(handler);
+		return () => {
+			this.#missingTranslationHandlers =
+				this.#missingTranslationHandlers.filter(
+					(candidate) => candidate !== handler,
+				);
+		};
 	}
 
 	setFallback(
@@ -371,6 +680,10 @@ export class Rosetta {
 	): this {
 		this.#fallback = fallback;
 		return this;
+	}
+
+	getFallbackMessage(identifier: string, locale: string): string | undefined {
+		return this.#fallback?.(identifier, normalizeLocale(locale));
 	}
 
 	setFallbackLocale(locale: string): this {
@@ -422,21 +735,19 @@ export class Rosetta {
 	 * match), Rosetta falls back to the default-locale chain — matching
 	 * `resolveLocale`'s always-resolve contract.
 	 */
-	getSupportedLocaleFor(userLanguage: string | string[]): string {
-		return this.resolveLocale(
+	getSupportedLocaleFor(userLanguage: string | string[]): string | null {
+		return negotiateLanguage(
 			Array.isArray(userLanguage) ? userLanguage.join(",") : userLanguage,
+			this.supportedLocales(),
 		);
 	}
 
-	has(key: string, locale = this.#locale): boolean {
+	has(key: string, locale = this.getLocale()): boolean {
 		const normalizedLocale = normalizeLocale(locale);
 		const chain = this.#localeChainFor(normalizedLocale);
-
-		if (!this.#nativeEngine) {
-			throw nativeEngineRequiredError();
-		}
-		this.#syncNativeEngine();
-		return this.#nativeEngine.has(key, JSON.stringify(chain));
+		return chain.some(
+			(candidate) => this.#messages[candidate]?.[key] !== undefined,
+		);
 	}
 
 	t(
@@ -444,19 +755,24 @@ export class Rosetta {
 		params?: TranslationParams,
 		options?: TranslateOptions,
 	): string {
-		const requestedLocale = normalizeLocale(options?.locale ?? this.#locale);
-		const chain = this.#localeChainFor(requestedLocale);
+		const requestedLocale = normalizeLocale(
+			options?.locale ?? this.getLocale(),
+		);
+		const chain = options?.fallbackLocale
+			? uniqueLocales([requestedLocale, options.fallbackLocale])
+			: this.#localeChainFor(requestedLocale);
 		const status = this.#resolveStatus(key, chain);
 
 		// AdonisJS parity: notify when the primary locale can't resolve the
 		// identifier — either missing everywhere (`hasFallback: false`) or found
 		// only through the fallback chain (`hasFallback: true`).
-		if (status !== "primary" && this.#onMissingTranslation) {
-			this.#onMissingTranslation({
+		if (status !== "primary") {
+			const payload = {
 				locale: requestedLocale,
 				identifier: key,
 				hasFallback: status === "fallback",
-			});
+			};
+			for (const handler of this.#missingTranslationHandlers) handler(payload);
 		}
 
 		// Missing everywhere with no inline `defaultValue`: honor the configured
@@ -467,51 +783,49 @@ export class Rosetta {
 			return `translation missing: ${requestedLocale}, ${key}`;
 		}
 
-		if (!this.#nativeEngine) {
-			throw nativeEngineRequiredError();
+		for (const candidate of chain) {
+			const message = this.#messages[candidate]?.[key];
+			if (message !== undefined) {
+				return this.getFormatter().format(message, requestedLocale, params);
+			}
 		}
-		this.#syncNativeEngine();
-		// `bigint` makes a plain `JSON.stringify` THROW, crashing `t()` — serialise
-		// it as its decimal string so it survives the boundary and renders/pluralises
-		// correctly (RO7). `Date` already serialises to an ISO string via `toJSON`,
-		// which the engine's date/time formatter now slices.
-		const paramsJson = params
-			? JSON.stringify(params, (_k, v) =>
-					typeof v === "bigint" ? v.toString() : v,
-				)
-			: undefined;
-		return this.#nativeEngine.translate(
-			key,
-			paramsJson,
-			JSON.stringify(chain),
-			options?.defaultValue,
-		);
+		return options?.defaultValue ?? key;
+	}
+
+	formatRawMessage(
+		message: string,
+		locale = this.#defaultLocale,
+		data?: TranslationParams,
+	): string {
+		return this.getFormatter().format(message, normalizeLocale(locale), data);
 	}
 
 	formatNumber(
-		value: number,
+		value: string | number | bigint,
 		options?: Intl.NumberFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
-		return new Intl.NumberFormat(normalizeLocale(locale), options).format(
-			value,
-		);
+		const formatter = getNumberFormatter(
+			normalizeLocale(locale),
+			options,
+		) as StringNumberFormat;
+		return formatter.format(value);
 	}
 
 	formatCurrency(
-		value: number,
+		value: string | number | bigint,
 		options: CurrencyFormatOptions,
 		locale?: string,
 	): string;
 	/** @deprecated Prefer the options-bag form `formatCurrency(value, { currency })`. */
 	formatCurrency(
-		value: number,
+		value: string | number | bigint,
 		currency: string,
 		options?: Intl.NumberFormatOptions,
 		locale?: string,
 	): string;
 	formatCurrency(
-		value: number,
+		value: string | number | bigint,
 		optionsOrCurrency: string | CurrencyFormatOptions,
 		optionsOrLocale?: Intl.NumberFormatOptions | string,
 		legacyLocale?: string,
@@ -526,7 +840,7 @@ export class Rosetta {
 			const locale =
 				legacyLocale ??
 				(typeof optionsOrLocale === "string" ? optionsOrLocale : undefined) ??
-				this.#locale;
+				this.getLocale();
 			return this.formatNumber(
 				value,
 				{ ...options, style: "currency", currency: optionsOrCurrency },
@@ -536,7 +850,7 @@ export class Rosetta {
 		// AdonisJS options-bag form: (value, { currency, ...opts }, locale?).
 		const { currency, ...rest } = optionsOrCurrency;
 		const locale =
-			typeof optionsOrLocale === "string" ? optionsOrLocale : this.#locale;
+			typeof optionsOrLocale === "string" ? optionsOrLocale : this.getLocale();
 		return this.formatNumber(
 			value,
 			{ ...rest, style: "currency", currency },
@@ -545,14 +859,12 @@ export class Rosetta {
 	}
 
 	formatDate(
-		value: Date | number | string,
+		value: DateTimeValue,
 		options?: Intl.DateTimeFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
-		const date = value instanceof Date ? value : new Date(value);
-		return new Intl.DateTimeFormat(normalizeLocale(locale), options).format(
-			date,
-		);
+		const date = new Date(normalizeDateTimeValue(value));
+		return getDateTimeFormatter(normalizeLocale(locale), options).format(date);
 	}
 
 	/**
@@ -561,9 +873,9 @@ export class Rosetta {
 	 * `second` components.
 	 */
 	formatTime(
-		value: Date | number | string,
+		value: DateTimeValue,
 		options?: Intl.DateTimeFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
 		let opts = options;
 		if (!opts) {
@@ -581,16 +893,14 @@ export class Rosetta {
 	 * No Luxon dependency — the diff is computed with plain `Date` math.
 	 */
 	formatRelativeTime(
-		value: Date | string | number,
+		value: DateTimeValue,
 		unit: Intl.RelativeTimeFormatUnit | "auto",
 		options?: Intl.RelativeTimeFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
 		const resolved = normalizeLocale(locale);
 		const diff = this.#getTimeDiff(value, unit);
-		const formatter = new Intl.RelativeTimeFormat(resolved, {
-			...(options ?? {}),
-		});
+		const formatter = getRelativeTimeFormatter(resolved, options);
 		if (unit === "auto") {
 			return formatRelativeAuto(formatter, diff);
 		}
@@ -607,9 +917,9 @@ export class Rosetta {
 	formatPlural(
 		value: number | string,
 		options?: Intl.PluralRulesOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
-		return new Intl.PluralRules(normalizeLocale(locale), options).select(
+		return getPluralRules(normalizeLocale(locale), options).select(
 			Number(value),
 		);
 	}
@@ -618,9 +928,9 @@ export class Rosetta {
 	formatList(
 		list: Iterable<string>,
 		options?: Intl.ListFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
-		return new Intl.ListFormat(normalizeLocale(locale), options).format(list);
+		return getListFormatter(normalizeLocale(locale), options).format(list);
 	}
 
 	/**
@@ -630,22 +940,20 @@ export class Rosetta {
 	formatDisplayNames(
 		code: string,
 		options: Intl.DisplayNamesOptions,
-		locale = this.#locale,
-	): string {
-		return (
-			new Intl.DisplayNames(normalizeLocale(locale), options).of(code) ?? code
-		);
+		locale = this.getLocale(),
+	): string | undefined {
+		return getDisplayNamesFormatter(normalizeLocale(locale), options).of(code);
 	}
 
 	#getTimeDiff(
-		value: Date | string | number,
+		value: DateTimeValue,
 		unit: Intl.RelativeTimeFormatUnit | "auto",
 	): number {
 		// A number is already a diff expressed in `unit` (milliseconds for auto).
 		if (typeof value === "number") {
 			return value;
 		}
-		const date = value instanceof Date ? value : new Date(value);
+		const date = new Date(normalizeDateTimeValue(value));
 		const diffMs = date.getTime() - Date.now();
 		if (unit === "auto") {
 			return diffMs;
@@ -661,13 +969,13 @@ export class Rosetta {
 	 * Cached per resolved locale so the `formatToParts` work runs
 	 * once per chain destination.
 	 */
-	getNumberFormatData(locale: string = this.#locale): NumberFormatData {
+	getNumberFormatData(locale: string = this.getLocale()): NumberFormatData {
 		const resolved = this.#resolveNumberLocale(locale);
 		const cached = this.#numberFormatDataCache.get(resolved);
 		if (cached) return cached;
-		const formatter = new Intl.NumberFormat(resolved);
+		const formatter = getNumberFormatter(resolved);
 		const negativeParts = formatter.formatToParts(-12345.6);
-		const positiveParts = new Intl.NumberFormat(resolved, {
+		const positiveParts = getNumberFormatter(resolved, {
 			signDisplay: "always",
 		}).formatToParts(1);
 		const data: NumberFormatData = {
@@ -691,10 +999,10 @@ export class Rosetta {
 	formatNumberString(
 		value: string,
 		options?: Intl.NumberFormatOptions,
-		locale = this.#locale,
+		locale = this.getLocale(),
 	): string {
 		const resolved = this.#resolveNumberLocale(locale);
-		const formatter = new Intl.NumberFormat(
+		const formatter = getNumberFormatter(
 			resolved,
 			options,
 		) as StringNumberFormat;
@@ -722,13 +1030,104 @@ export class Rosetta {
 		return "en";
 	}
 
-	async #loadFromLoaders(locale: string): Promise<void> {
-		for (const loader of this.#loaders) {
-			const messages = await loader.load(locale);
-			if (messages) {
-				this.loadMessages(locale, messages);
+	async loadTranslations(): Promise<void> {
+		if (this.#hasCachedTranslations) return;
+		await this.reloadTranslations();
+	}
+
+	async reloadTranslations(): Promise<void> {
+		if (this.#translationsLoadPromise) {
+			await this.#translationsLoadPromise;
+			return;
+		}
+		const loading = this.#reloadTranslations();
+		this.#translationsLoadPromise = loading;
+		try {
+			await loading;
+		} finally {
+			if (this.#translationsLoadPromise === loading) {
+				this.#translationsLoadPromise = undefined;
 			}
 		}
+	}
+
+	async #reloadTranslations(): Promise<void> {
+		const translations = Object.create(null) as Record<string, MessageCatalog>;
+		for (const [locale, messages] of Object.entries(this.#initialMessages)) {
+			mergeMessagesInto(translations, locale, messages);
+		}
+		const translationsStack = await Promise.all(
+			this.#createLoaders().map((loader) => this.#loadAllFromLoader(loader)),
+		);
+		for (const loadedTranslations of translationsStack) {
+			mergeTranslationsInto(translations, loadedTranslations);
+		}
+		this.#messages = translations;
+		this.#hasCachedTranslations = true;
+	}
+
+	async #loadFromLoaders(locale: string): Promise<void> {
+		const messagesStack = await Promise.all(
+			this.#createLoaders().map((loader) =>
+				this.#loadLocaleFromLoader(loader, locale),
+			),
+		);
+		const catalogs = messagesStack
+			.filter(
+				(messages): messages is MessageTree | MessageCatalog =>
+					messages !== null && messages !== undefined,
+			)
+			.map(flattenMessages);
+		if (catalogs.length === 0) return;
+
+		const merged = { ...(this.#messages[locale] ?? {}) };
+		for (const catalog of catalogs) Object.assign(merged, catalog);
+		this.#messages[locale] = merged;
+	}
+
+	#createLoaders(): Loader[] {
+		return this.#loaderEntries.map((loader) =>
+			typeof loader === "function" ? loader(this.config) : loader,
+		);
+	}
+
+	async #loadAllFromLoader(
+		loader: Loader,
+	): Promise<Record<string, MessageTree | MessageCatalog>> {
+		if ("loadAll" in loader && loader.loadAll) return loader.loadAll();
+		if (this.#supportedLocales && loader.load.length > 0) {
+			const locales = Array.from(this.#supportedLocales);
+			const messages = await Promise.all(
+				locales.map((locale) => (loader as RosettaLoader).load(locale)),
+			);
+			const translations = Object.create(null) as Record<
+				string,
+				MessageTree | MessageCatalog
+			>;
+			for (let index = 0; index < locales.length; index++) {
+				const localeMessages = messages[index];
+				if (localeMessages) translations[locales[index]] = localeMessages;
+			}
+			return translations;
+		}
+		return (
+			(await (loader as TranslationsLoaderContract).load()) ??
+			Object.create(null)
+		);
+	}
+
+	async #loadLocaleFromLoader(
+		loader: Loader,
+		locale: string,
+	): Promise<MessageTree | MessageCatalog | null | undefined> {
+		if ("loadAll" in loader && loader.loadAll) {
+			const translations = await loader.loadAll();
+			const matchingLocale = Object.keys(translations).find(
+				(candidate) => normalizeLocale(candidate) === locale,
+			);
+			return matchingLocale ? translations[matchingLocale] : undefined;
+		}
+		return (loader as RosettaLoader).load(locale);
 	}
 
 	/**
@@ -742,11 +1141,11 @@ export class Rosetta {
 		key: string,
 		chain: string[],
 	): "primary" | "fallback" | "missing" {
-		if (this.#messages.get(chain[0])?.[key] !== undefined) {
+		if (this.#messages[chain[0]]?.[key] !== undefined) {
 			return "primary";
 		}
 		for (let i = 1; i < chain.length; i++) {
-			if (this.#messages.get(chain[i])?.[key] !== undefined) {
+			if (this.#messages[chain[i]]?.[key] !== undefined) {
 				return "fallback";
 			}
 		}
@@ -773,57 +1172,9 @@ export class Rosetta {
 		};
 
 		push(locale);
-
-		const localeParts = locale.split("-");
-		if (localeParts.length > 1) {
-			push(localeParts[0]);
-		}
-
-		const explicitFallback = this.#fallbackLocales[locale];
-		if (explicitFallback) {
-			push(explicitFallback);
-			const explicitParts = explicitFallback.split("-");
-			if (explicitParts.length > 1) {
-				push(explicitParts[0]);
-			}
-		}
-
-		push(this.#fallbackLocale);
-		const fallbackParts = this.#fallbackLocale.split("-");
-		if (fallbackParts.length > 1) {
-			push(fallbackParts[0]);
-		}
-		push(this.#defaultLocale);
-		const defaultParts = this.#defaultLocale.split("-");
-		if (defaultParts.length > 1) {
-			push(defaultParts[0]);
-		}
+		push(this.getFallbackLocaleFor(locale));
 
 		return chain;
-	}
-
-	/**
-	 * Sync the Rust-resident catalog with the TS-side `#messages` map. Only
-	 * performs JSON.stringify when the dirty flag is set (a locale was loaded or
-	 * edited). On subsequent `t()` / `has()` calls with no changes, this is a
-	 * no-op — the Rust engine already holds the parsed catalog in memory.
-	 *
-	 * Story 37.9: this replaces the old `#catalogsJson()` which serialized the
-	 * entire catalog on EVERY `t()` call.
-	 */
-	#syncNativeEngine(): void {
-		if (!this.#nativeEngine) return;
-		if (!this.#catalogsCacheDirty && this.#catalogsCache) return;
-		const cache: Record<string, MessageCatalog> = {};
-		for (const [locale, catalog] of this.#messages.entries()) {
-			cache[locale] = catalog;
-		}
-		// loadCatalogs may throw (malformed JSON, lock poisoned). The dirty flag
-		// is only cleared AFTER a successful load so a retry on the next t()
-		// call re-attempts instead of silently using a stale/empty catalog.
-		this.#nativeEngine.loadCatalogs(JSON.stringify(cache));
-		this.#catalogsCache = cache;
-		this.#catalogsCacheDirty = false;
 	}
 }
 
@@ -878,57 +1229,165 @@ function normalizeLocale(locale: string): string {
 	return locale.trim().replace(/_/g, "-").toLowerCase();
 }
 
+function normalizeDateTimeValue(value: DateTimeValue): Date | number {
+	if (value instanceof Date || typeof value === "number") return value;
+	if (typeof value === "string") return new Date(value);
+	if ("toJSDate" in value) return value.toJSDate();
+	return value.toMillis();
+}
+
 function normalizeFallbackMap(
 	map: Record<string, string>,
 ): Record<string, string> {
-	const normalized: Record<string, string> = {};
+	const normalized = Object.create(null) as Record<string, string>;
 	for (const [from, to] of Object.entries(map)) {
 		normalized[normalizeLocale(from)] = normalizeLocale(to);
 	}
 	return normalized;
 }
 
+function uniqueLocales(locales: readonly string[]): string[] {
+	return Array.from(new Set(locales.map(normalizeLocale).filter(Boolean)));
+}
+
 function parseAcceptLanguage(header: string): string[] {
+	return parseLanguagePreferences(header).map((entry) => entry.locale);
+}
+
+interface LanguagePreference {
+	locale: string;
+	quality: number;
+	order: number;
+}
+
+function parseLanguagePreferences(header: string): LanguagePreference[] {
 	return header
 		.split(",")
 		.map((item) => item.trim())
 		.filter(Boolean)
-		.map((item) => {
+		.map((item, order) => {
 			const [localePart, ...rest] = item.split(";");
 			let quality = 1;
 			for (const part of rest) {
 				const trimmed = part.trim();
-				if (trimmed.startsWith("q=")) {
-					const n = Number(trimmed.slice(2));
-					if (Number.isFinite(n)) quality = n;
+				if (trimmed.toLowerCase().startsWith("q=")) {
+					quality = Number(trimmed.slice(2));
 				}
 			}
-			return { locale: normalizeLocale(localePart), quality };
+			return { locale: normalizeLocale(localePart), quality, order };
 		})
-		.filter((entry) => entry.locale.length > 0)
-		.sort((a, b) => b.quality - a.quality)
-		.map((entry) => entry.locale);
+		.filter(
+			(entry) =>
+				entry.locale.length > 0 && entry.quality > 0 && entry.quality <= 1,
+		)
+		.sort((a, b) => b.quality - a.quality || a.order - b.order);
+}
+
+function negotiateLanguage(
+	header: string,
+	supportedLocales: readonly string[],
+): string | null {
+	const supported = supportedLocales.map((locale, order) => ({
+		original: locale,
+		normalized: normalizeLocale(locale),
+		order,
+	}));
+	let best:
+		| {
+				locale: string;
+				quality: number;
+				specificity: number;
+				requestOrder: number;
+				supportedOrder: number;
+		  }
+		| undefined;
+
+	for (const requested of parseLanguagePreferences(header)) {
+		for (const candidate of supported) {
+			const specificity = languageMatchSpecificity(
+				requested.locale,
+				candidate.normalized,
+			);
+			if (specificity < 0) continue;
+			const match = {
+				locale: candidate.original,
+				quality: requested.quality,
+				specificity,
+				requestOrder: requested.order,
+				supportedOrder: candidate.order,
+			};
+			if (!best || compareLanguageMatches(match, best) > 0) best = match;
+		}
+	}
+	return best?.locale ?? null;
+}
+
+function languageMatchSpecificity(
+	requested: string,
+	supported: string,
+): number {
+	if (requested === "*") return 0;
+	if (requested === supported) return 2;
+	if (
+		requested.startsWith(`${supported}-`) ||
+		supported.startsWith(`${requested}-`)
+	) {
+		return 1;
+	}
+	return -1;
+}
+
+function compareLanguageMatches(
+	left: {
+		quality: number;
+		specificity: number;
+		requestOrder: number;
+		supportedOrder: number;
+	},
+	right: {
+		quality: number;
+		specificity: number;
+		requestOrder: number;
+		supportedOrder: number;
+	},
+): number {
+	return (
+		left.quality - right.quality ||
+		left.specificity - right.specificity ||
+		right.requestOrder - left.requestOrder ||
+		right.supportedOrder - left.supportedOrder
+	);
 }
 
 function flattenMessages(
 	messages: MessageTree | MessageCatalog,
 ): MessageCatalog {
-	const out: MessageCatalog = {};
-	walkFlatten("", messages, out);
+	const out = Object.create(null) as MessageCatalog;
+	walkFlatten("", messages, out, 0, { keys: 0 });
 	return out;
 }
+
+const MAX_CATALOG_DEPTH = 100;
+const MAX_CATALOG_KEYS = 100_000;
 
 function walkFlatten(
 	prefix: string,
 	value: MessageTree | MessageCatalog | MessageValue,
 	out: MessageCatalog,
+	depth: number,
+	state: { keys: number },
 ): void {
+	if (depth > MAX_CATALOG_DEPTH) {
+		throw new RangeError(
+			`Translation catalog exceeds ${MAX_CATALOG_DEPTH} nesting levels`,
+		);
+	}
 	if (typeof value === "string") {
-		out[prefix] = value;
+		setFlattenedMessage(out, prefix, value);
 		return;
 	}
 	if (typeof value === "number" || typeof value === "boolean") {
-		out[prefix] = String(value);
+		setFlattenedMessage(out, prefix, String(value));
 		return;
 	}
 	if (value === null || value === undefined) {
@@ -936,11 +1395,62 @@ function walkFlatten(
 	}
 
 	for (const [key, child] of Object.entries(value)) {
+		state.keys += 1;
+		if (state.keys > MAX_CATALOG_KEYS) {
+			throw new RangeError(
+				`Translation catalog exceeds the ${MAX_CATALOG_KEYS} key limit`,
+			);
+		}
+		assertSafeMessageKey(key);
 		const next = prefix ? `${prefix}.${key}` : key;
 		walkFlatten(
 			next,
 			child as MessageTree | MessageCatalog | MessageValue,
 			out,
+			depth + 1,
+			state,
 		);
+	}
+}
+
+function setFlattenedMessage(
+	out: MessageCatalog,
+	identifier: string,
+	message: string,
+): void {
+	if (Object.hasOwn(out, identifier)) {
+		throw new Error(`Duplicate flattened translation key '${identifier}'`);
+	}
+	out[identifier] = message;
+}
+
+const DANGEROUS_MESSAGE_KEYS = new Set([
+	"__proto__",
+	"prototype",
+	"constructor",
+]);
+
+function assertSafeMessageKey(key: string): void {
+	if (DANGEROUS_MESSAGE_KEYS.has(key)) {
+		throw new Error(`Unsafe translation key '${key}'`);
+	}
+}
+
+function mergeMessagesInto(
+	target: Record<string, MessageCatalog>,
+	locale: string,
+	messages: MessageTree | MessageCatalog,
+): void {
+	const normalizedLocale = normalizeLocale(locale);
+	const existing = target[normalizedLocale] ?? {};
+	target[normalizedLocale] = { ...existing, ...flattenMessages(messages) };
+}
+
+function mergeTranslationsInto(
+	target: Record<string, MessageCatalog>,
+	translations: Record<string, MessageTree | MessageCatalog>,
+): void {
+	for (const [locale, messages] of Object.entries(translations)) {
+		mergeMessagesInto(target, locale, messages);
 	}
 }

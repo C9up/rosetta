@@ -1,0 +1,9 @@
+import { defineConfig, formatters, loaders } from '@c9up/rosetta'
+
+export default defineConfig({
+  defaultLocale: 'en',
+  formatter: formatters.icu(),
+  loaders: [
+    loaders.fs({ location: new URL('../resources/lang/', import.meta.url) }),
+  ],
+})

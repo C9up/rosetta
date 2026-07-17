@@ -24,6 +24,12 @@ pub struct RosettaEngine {
     catalogs: Mutex<rosetta_engine::engine::Catalogs>,
 }
 
+impl Default for RosettaEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[napi]
 impl RosettaEngine {
     #[napi(constructor)]
@@ -40,7 +46,9 @@ impl RosettaEngine {
     pub fn load_catalogs(&self, catalogs_json: String) -> Result<()> {
         let parsed: rosetta_engine::engine::Catalogs = serde_json::from_str(&catalogs_json)
             .map_err(|e| Error::from_reason(format!("Invalid catalogs JSON: {}", e)))?;
-        let mut guard = self.catalogs.lock()
+        let mut guard = self
+            .catalogs
+            .lock()
             .map_err(|_| Error::from_reason("Catalog lock poisoned"))?;
         *guard = parsed;
         Ok(())
@@ -55,14 +63,24 @@ impl RosettaEngine {
         chain_json: String,
         default_value: Option<String>,
     ) -> Result<String> {
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| -> std::result::Result<String, String> {
-            let guard = self.catalogs.lock()
-                .map_err(|_| "Catalog lock poisoned".to_string())?;
-            let params = parse_params(params_json.as_deref())?;
-            let chain: Vec<String> = serde_json::from_str(&chain_json)
-                .map_err(|e| format!("Invalid chain JSON: {}", e))?;
-            Ok(rosetta_engine::translate(&guard, &key, params.as_ref(), &chain, default_value.as_deref()))
-        }));
+        let result = catch_unwind(std::panic::AssertUnwindSafe(
+            || -> std::result::Result<String, String> {
+                let guard = self
+                    .catalogs
+                    .lock()
+                    .map_err(|_| "Catalog lock poisoned".to_string())?;
+                let params = parse_params(params_json.as_deref())?;
+                let chain: Vec<String> = serde_json::from_str(&chain_json)
+                    .map_err(|e| format!("Invalid chain JSON: {}", e))?;
+                Ok(rosetta_engine::translate(
+                    &guard,
+                    &key,
+                    params.as_ref(),
+                    &chain,
+                    default_value.as_deref(),
+                ))
+            },
+        ));
         match result {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(Error::from_reason(e)),
@@ -73,13 +91,17 @@ impl RosettaEngine {
     /// Check if a key exists in the resident catalogs.
     #[napi]
     pub fn has(&self, key: String, chain_json: String) -> Result<bool> {
-        let result = catch_unwind(std::panic::AssertUnwindSafe(|| -> std::result::Result<bool, String> {
-            let guard = self.catalogs.lock()
-                .map_err(|_| "Catalog lock poisoned".to_string())?;
-            let chain: Vec<String> = serde_json::from_str(&chain_json)
-                .map_err(|e| format!("Invalid chain JSON: {}", e))?;
-            Ok(rosetta_engine::has_key(&guard, &key, &chain))
-        }));
+        let result = catch_unwind(std::panic::AssertUnwindSafe(
+            || -> std::result::Result<bool, String> {
+                let guard = self
+                    .catalogs
+                    .lock()
+                    .map_err(|_| "Catalog lock poisoned".to_string())?;
+                let chain: Vec<String> = serde_json::from_str(&chain_json)
+                    .map_err(|e| format!("Invalid chain JSON: {}", e))?;
+                Ok(rosetta_engine::has_key(&guard, &key, &chain))
+            },
+        ));
         match result {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(Error::from_reason(e)),
@@ -99,12 +121,18 @@ pub fn translate(
     default_value: Option<String>,
 ) -> Result<String> {
     let result = catch_unwind(|| -> std::result::Result<String, String> {
-        let catalogs: rosetta_engine::engine::Catalogs =
-            serde_json::from_str(&catalogs_json).map_err(|e| format!("Invalid catalogs JSON: {}", e))?;
+        let catalogs: rosetta_engine::engine::Catalogs = serde_json::from_str(&catalogs_json)
+            .map_err(|e| format!("Invalid catalogs JSON: {}", e))?;
         let params = parse_params(params_json.as_deref())?;
         let chain: Vec<String> =
             serde_json::from_str(&chain_json).map_err(|e| format!("Invalid chain JSON: {}", e))?;
-        Ok(rosetta_engine::translate(&catalogs, &key, params.as_ref(), &chain, default_value.as_deref()))
+        Ok(rosetta_engine::translate(
+            &catalogs,
+            &key,
+            params.as_ref(),
+            &chain,
+            default_value.as_deref(),
+        ))
     });
     match result {
         Ok(Ok(value)) => Ok(value),
@@ -116,8 +144,8 @@ pub fn translate(
 #[napi]
 pub fn has(catalogs_json: String, key: String, chain_json: String) -> Result<bool> {
     let result = catch_unwind(|| -> std::result::Result<bool, String> {
-        let catalogs: rosetta_engine::engine::Catalogs =
-            serde_json::from_str(&catalogs_json).map_err(|e| format!("Invalid catalogs JSON: {}", e))?;
+        let catalogs: rosetta_engine::engine::Catalogs = serde_json::from_str(&catalogs_json)
+            .map_err(|e| format!("Invalid catalogs JSON: {}", e))?;
         let chain: Vec<String> =
             serde_json::from_str(&chain_json).map_err(|e| format!("Invalid chain JSON: {}", e))?;
         Ok(rosetta_engine::has_key(&catalogs, &key, &chain))
@@ -129,9 +157,40 @@ pub fn has(catalogs_json: String, key: String, chain_json: String) -> Result<boo
     }
 }
 
+/// Parse and validate an ICU MessageFormat string in Rust. JavaScript keeps the
+/// locale-sensitive ECMA-402 rendering, but no longer reparses message syntax.
+#[napi]
+pub fn parse_message(message: String) -> Result<String> {
+    let result = catch_unwind(|| {
+        let ast = rosetta_engine::parse_message(&message)?;
+        serde_json::to_string(&ast).map_err(|error| error.to_string())
+    });
+    match result {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(Error::from_reason(error)),
+        Err(_) => Err(Error::from_reason("Internal panic in rosetta engine")),
+    }
+}
+
+/// Parse a JSON/YAML translation catalog in Rust and return normalized JSON.
+#[napi]
+pub fn parse_catalog(input: String, format: String) -> Result<String> {
+    let result = catch_unwind(|| {
+        let catalog = rosetta_engine::parse_catalog(&input, &format)?;
+        serde_json::to_string(&catalog).map_err(|error| error.to_string())
+    });
+    match result {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(Error::from_reason(error)),
+        Err(_) => Err(Error::from_reason("Internal panic in rosetta engine")),
+    }
+}
+
 // ─── Shared helpers ────────────────────────────────────────────
 
-fn parse_params(raw: Option<&str>) -> std::result::Result<Option<std::collections::HashMap<String, serde_json::Value>>, String> {
+fn parse_params(
+    raw: Option<&str>,
+) -> std::result::Result<Option<std::collections::HashMap<String, serde_json::Value>>, String> {
     match raw {
         Some(json) => {
             let map: std::collections::HashMap<String, serde_json::Value> =

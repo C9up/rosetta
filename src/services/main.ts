@@ -26,6 +26,11 @@ export function getI18n(): Rosetta | undefined {
 	return instance;
 }
 
+/** @internal Clear a provider-owned singleton during application shutdown. */
+export function clearI18n(value?: Rosetta): void {
+	if (value === undefined || instance === value) instance = undefined;
+}
+
 const i18n: Rosetta = new Proxy({} as Rosetta, {
 	get(_target, prop) {
 		if (!instance) {

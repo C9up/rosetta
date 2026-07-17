@@ -47,6 +47,40 @@ describe("rosetta > FileSystemLoader > security", () => {
 		expect(await loader.load("en-US")).toEqual({ hello: "Hi" });
 		expect(await loader.load("zh-Hant-TW")).toEqual({ hello: "你好" });
 	});
+
+	it("does not follow a flat locale symlink outside the language root", async () => {
+		const outside = path.join(
+			os.tmpdir(),
+			`rosetta-outside-${Date.now()}.json`,
+		);
+		await fsp.writeFile(outside, JSON.stringify({ secret: "outside" }));
+		try {
+			await fsp.symlink(outside, path.join(dir, "en.json"));
+			await expect(
+				new FileSystemLoader({ rootDir: dir }).load("en"),
+			).rejects.toBeTruthy();
+		} finally {
+			await fsp.rm(outside, { force: true });
+		}
+	});
+
+	it("does not follow a locale directory symlink outside the language root", async () => {
+		const outside = await fsp.mkdtemp(
+			path.join(os.tmpdir(), "rosetta-outside-dir-"),
+		);
+		await fsp.writeFile(
+			path.join(outside, "secret.json"),
+			JSON.stringify({ value: "outside" }),
+		);
+		try {
+			await fsp.symlink(outside, path.join(dir, "en"), "dir");
+			await expect(
+				new FileSystemLoader({ rootDir: dir }).load("en"),
+			).rejects.toThrow(/symbolic link/);
+		} finally {
+			await fsp.rm(outside, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("rosetta > FileSystemLoader > extension fallback", () => {
@@ -88,7 +122,33 @@ describe("rosetta > FileSystemLoader > extension fallback", () => {
 	it("propagates non-ENOENT errors (malformed JSON must NOT be silenced)", async () => {
 		await fsp.writeFile(path.join(dir, "broken.json"), "{ not valid json");
 		const loader = new FileSystemLoader({ rootDir: dir });
-		await expect(loader.load("broken")).rejects.toBeTruthy();
+		try {
+			await loader.load("broken");
+			expect.unreachable("malformed JSON should fail");
+		} catch (error) {
+			expect((error as Error).stack).toContain("at anonymous (broken.json)");
+		}
+	});
+
+	it("trims a UTF-8 BOM from JSON catalogs like the Adonis loader", async () => {
+		await fsp.writeFile(
+			path.join(dir, "fr.json"),
+			'\uFEFF{"greeting":"Bonjour"}',
+		);
+		await expect(
+			new FileSystemLoader({ rootDir: dir }).load("fr"),
+		).resolves.toEqual({ greeting: "Bonjour" });
+	});
+
+	it("rejects JSON arrays instead of flattening numeric indexes", async () => {
+		await fsp.writeFile(
+			path.join(dir, "broken.json"),
+			JSON.stringify({ messages: ["one", "two"] }),
+		);
+		const loader = new FileSystemLoader({ rootDir: dir });
+		await expect(loader.load("broken")).rejects.toThrow(
+			/arrays are not allowed/,
+		);
 	});
 });
 
@@ -208,6 +268,21 @@ describe("rosetta > FileSystemLoader > YAML parser", () => {
 		});
 	});
 
+	it("preserves hashes inside quoted scalar values", async () => {
+		expect(await loadYaml('name: "hello # world" # comment')).toEqual({
+			name: "hello # world",
+		});
+	});
+
+	it("fails closed on unsupported YAML instead of partially loading it", async () => {
+		await expect(loadYaml("items: [one, two]")).rejects.toThrow(
+			/Unsupported YAML/,
+		);
+		await expect(loadYaml("- sequence item")).rejects.toThrow(
+			/Unsupported YAML/,
+		);
+	});
+
 	it("ignores blank lines and full-line comments", async () => {
 		const yaml = `# top comment\nname: hugo\n\n# trailing comment`;
 		expect(await loadYaml(yaml)).toEqual({ name: "hugo" });
@@ -230,5 +305,24 @@ describe("rosetta > FileSystemLoader > YAML parser", () => {
 			en: { hello: "Hello", bye: "Goodbye" },
 			fr: { hello: "Salut" },
 		});
+	});
+
+	it("supports quoted keys, exponent numbers, and case-insensitive core scalars", async () => {
+		const yaml = `'message.key': Hello\nratio: 1.5e2\nenabled: TRUE\nmissing: ~`;
+		expect(await loadYaml(yaml)).toEqual({
+			"message.key": "Hello",
+			ratio: 150,
+			enabled: true,
+			missing: null,
+		});
+	});
+
+	it("rejects duplicate keys and unexpected indentation", async () => {
+		await expect(loadYaml("name: first\nname: second")).rejects.toThrow(
+			/Duplicate YAML key/,
+		);
+		await expect(loadYaml("name: first\n  nested: invalid")).rejects.toThrow(
+			/indent/i,
+		);
 	});
 });

@@ -9,20 +9,51 @@
   "files": [
     "LICENSE",
     "README.md",
+    "benchmarks",
     "dist",
     "index.*.node",
     "scripts",
     "src",
+    "stubs",
     "wasm"
   ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
+      "browser": "./src/index.browser.ts",
       "import": "./src/index.ts"
     },
     "./provider": {
       "types": "./src/RosettaProvider.ts",
       "import": "./src/RosettaProvider.ts"
+    },
+    "./factories": {
+      "types": "./src/factories/main.ts",
+      "import": "./src/factories/main.ts"
+    },
+    "./i18n_provider": {
+      "types": "./src/RosettaProvider.ts",
+      "import": "./src/RosettaProvider.ts"
+    },
+    "./middleware": {
+      "types": "./src/middleware.ts",
+      "import": "./src/middleware.ts"
+    },
+    "./configure": {
+      "types": "./src/configure.ts",
+      "import": "./src/configure.ts"
+    },
+    "./plugins/edge": {
+      "types": "./src/plugins/edge.ts",
+      "import": "./src/plugins/edge.ts"
+    },
+    "./repl": {
+      "types": "./src/repl.ts",
+      "import": "./src/repl.ts"
+    },
+    "./types": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
     },
     "./services/main": {
       "types": "./src/services/main.ts",
@@ -36,11 +67,13 @@
     "test": "vitest run",
     "test:rust": "cargo test",
     "test:napi": "node scripts/verify-napi.mjs",
+    "test:browser": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs",
+    "bench": "node benchmarks/rosetta.mjs",
     "lint": "biome check src/ tests/",
     "build:wasm": "wasm-pack build --target web crates/rosetta-engine-wasm --out-dir ../../wasm",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc -p tsconfig.build.json && pnpm build:wasm && node scripts/verify-wasm.mjs"
+    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/verify-browser.mjs && pnpm build:wasm && node scripts/verify-wasm.mjs && node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
@@ -57,11 +90,40 @@
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
+        "browser": "./dist/index.browser.js",
         "import": "./dist/index.js"
       },
       "./provider": {
         "types": "./dist/RosettaProvider.d.ts",
         "import": "./dist/RosettaProvider.js"
+      },
+      "./factories": {
+        "types": "./dist/factories/main.d.ts",
+        "import": "./dist/factories/main.js"
+      },
+      "./i18n_provider": {
+        "types": "./dist/RosettaProvider.d.ts",
+        "import": "./dist/RosettaProvider.js"
+      },
+      "./middleware": {
+        "types": "./dist/middleware.d.ts",
+        "import": "./dist/middleware.js"
+      },
+      "./configure": {
+        "types": "./dist/configure.d.ts",
+        "import": "./dist/configure.js"
+      },
+      "./plugins/edge": {
+        "types": "./dist/plugins/edge.d.ts",
+        "import": "./dist/plugins/edge.js"
+      },
+      "./repl": {
+        "types": "./dist/repl.d.ts",
+        "import": "./dist/repl.js"
+      },
+      "./types": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
       },
       "./services/main": {
         "types": "./dist/services/main.d.ts",

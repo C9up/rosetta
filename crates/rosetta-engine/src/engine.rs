@@ -43,7 +43,11 @@ pub fn translate(
 // This replaces the previous TS `format.ts` — all formatting now runs in Rust.
 
 /// Top-level entry point for formatting a single message string.
-pub fn format_message(message: &str, params: Option<&HashMap<String, Value>>, locale: &str) -> String {
+pub fn format_message(
+    message: &str,
+    params: Option<&HashMap<String, Value>>,
+    locale: &str,
+) -> String {
     // Fast path only when there's neither a placeholder NOR an apostrophe — the
     // latter still needs ICU quote decoding (`''` → `'`, `'{'` → `{`), even with
     // no `{` in the message (RO2).
@@ -100,7 +104,7 @@ fn consume_quote(segment: &str, i: usize, out: &mut String) -> usize {
             while j < segment.len() {
                 let cc = segment[j..].chars().next().unwrap();
                 if cc == '\'' {
-                    if segment[j + 1..].chars().next() == Some('\'') {
+                    if segment[j + 1..].starts_with('\'') {
                         out.push('\'');
                         j += 2;
                     } else {
@@ -159,7 +163,8 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
                 None => "other".to_string(),
             };
             let options = parse_options(options_raw);
-            let selected = options.get(key.as_str())
+            let selected = options
+                .get(key.as_str())
                 .or_else(|| options.get("other"))
                 .cloned()
                 .unwrap_or_default();
@@ -182,7 +187,8 @@ fn resolve_token(content: &str, params: Option<&HashMap<String, Value>>, locale:
             // CLDR plural category
             let ordinal = kind == "selectordinal";
             let category = plural_category(adjusted, locale, ordinal);
-            let selected = options.get(category)
+            let selected = options
+                .get(category)
                 .or_else(|| options.get("other"))
                 .cloned()
                 .unwrap_or_default();
@@ -242,9 +248,13 @@ fn value_to_string(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() { i.to_string() }
-            else if let Some(f) = n.as_f64() { f.to_string() }
-            else { n.to_string() }
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(f) = n.as_f64() {
+                f.to_string()
+            } else {
+                n.to_string()
+            }
         }
         Value::Bool(b) => b.to_string(),
         _ => v.to_string(),
@@ -371,7 +381,11 @@ fn parse_options(input: &str) -> HashMap<&str, String> {
         while idx < chars.len() && !chars[idx].1.is_whitespace() && chars[idx].1 != '{' {
             idx += 1;
         }
-        let key_end = if idx < chars.len() { chars[idx].0 } else { source.len() };
+        let key_end = if idx < chars.len() {
+            chars[idx].0
+        } else {
+            source.len()
+        };
         let key = &source[key_start..key_end];
 
         // Skip whitespace before '{'.
@@ -400,7 +414,8 @@ fn parse_options(input: &str) -> HashMap<&str, String> {
 fn parse_offset(input: &str) -> i32 {
     if let Some(pos) = input.find("offset:") {
         let rest = &input[pos + 7..];
-        let num_str: String = rest.chars()
+        let num_str: String = rest
+            .chars()
             .take_while(|c| c.is_ascii_digit() || *c == '-')
             .collect();
         num_str.parse::<i32>().unwrap_or(0)
@@ -415,8 +430,12 @@ fn split_top_level(input: &str, sep: char) -> Vec<&str> {
     let mut start = 0;
 
     for (i, ch) in input.char_indices() {
-        if ch == '{' { depth += 1; }
-        if ch == '}' { depth -= 1; }
+        if ch == '{' {
+            depth += 1;
+        }
+        if ch == '}' {
+            depth -= 1;
+        }
         if ch == sep && depth == 0 {
             parts.push(input[start..i].trim());
             start = i + 1;
@@ -471,10 +490,19 @@ fn find_matching_brace(input: &str, open_index: usize) -> usize {
 // handles the practical 95% at zero additional binary size.
 
 fn plural_category(n: f64, locale: &str, ordinal: bool) -> &'static str {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
     let abs_n = n.abs();
     let i = abs_n as u64; // integer part
-    let v = if abs_n == abs_n.floor() { 0 } else { // number of visible fraction digits
+    let v = if abs_n == abs_n.floor() {
+        0
+    } else {
+        // number of visible fraction digits
         let s = format!("{}", abs_n);
         s.find('.').map(|p| s.len() - p - 1).unwrap_or(0)
     };
@@ -485,61 +513,102 @@ fn plural_category(n: f64, locale: &str, ordinal: bool) -> &'static str {
 
     match lang {
         // One = 1 (integer, no visible fraction)
-        "en" | "de" | "nl" | "sv" | "da" | "no" | "nb" | "nn" | "it" | "es" | "el"
-        | "fi" | "he" | "hu" | "tr" | "bg" | "ca" | "et" | "gl" | "hi" | "sw" => {
-            if i == 1 && v == 0 { "one" } else { "other" }
+        "en" | "de" | "nl" | "sv" | "da" | "no" | "nb" | "nn" | "it" | "es" | "el" | "fi"
+        | "he" | "hu" | "tr" | "bg" | "ca" | "et" | "gl" | "hi" | "sw" => {
+            if i == 1 && v == 0 {
+                "one"
+            } else {
+                "other"
+            }
         }
         // French + Portuguese: one = 0 or 1. (Region is stripped above, so `pt`
         // covers pt-BR and generic pt — both CLDR `one = 0..1`. RO5: the old
         // `"pt-BR"` arm was dead code since `lang` never carries a region.)
         "fr" | "pt" => {
-            if i == 0 || i == 1 { "one" } else { "other" }
+            if i == 0 || i == 1 {
+                "one"
+            } else {
+                "other"
+            }
         }
         // Arabic: zero, one, two, few, many, other
         "ar" => {
-            if abs_n == 0.0 { "zero" }
-            else if i == 1 && v == 0 { "one" }
-            else if i == 2 && v == 0 { "two" }
-            else {
+            if abs_n == 0.0 {
+                "zero"
+            } else if i == 1 && v == 0 {
+                "one"
+            } else if i == 2 && v == 0 {
+                "two"
+            } else {
                 let mod100 = i % 100;
-                if (3..=10).contains(&mod100) { "few" }
-                else if (11..=99).contains(&mod100) { "many" }
-                else { "other" }
+                if (3..=10).contains(&mod100) {
+                    "few"
+                } else if (11..=99).contains(&mod100) {
+                    "many"
+                } else {
+                    "other"
+                }
             }
         }
         // Polish: one=1, few=2-4 (mod 10, not 12-14), many=rest
         "pl" => {
-            if i == 1 && v == 0 { "one" }
-            else {
+            if i == 1 && v == 0 {
+                "one"
+            } else {
                 let mod10 = i % 10;
                 let mod100 = i % 100;
-                if v == 0 && (2..=4).contains(&mod10) && !(12..=14).contains(&mod100) { "few" }
-                else if v == 0 && (mod10 == 0 || mod10 == 1 || (5..=9).contains(&mod10) || (12..=14).contains(&mod100)) { "many" }
-                else { "other" }
+                if v == 0 && (2..=4).contains(&mod10) && !(12..=14).contains(&mod100) {
+                    "few"
+                } else if v == 0
+                    && (mod10 == 0
+                        || mod10 == 1
+                        || (5..=9).contains(&mod10)
+                        || (12..=14).contains(&mod100))
+                {
+                    "many"
+                } else {
+                    "other"
+                }
             }
         }
         // Russian/Ukrainian: one=1, few=2-4 (mod 10, not 12-14), many=rest
         "ru" | "uk" => {
             let mod10 = i % 10;
             let mod100 = i % 100;
-            if v == 0 && mod10 == 1 && mod100 != 11 { "one" }
-            else if v == 0 && (2..=4).contains(&mod10) && !(12..=14).contains(&mod100) { "few" }
-            else if v == 0 && (mod10 == 0 || (5..=9).contains(&mod10) || (11..=14).contains(&mod100)) { "many" }
-            else { "other" }
+            if v == 0 && mod10 == 1 && mod100 != 11 {
+                "one"
+            } else if v == 0 && (2..=4).contains(&mod10) && !(12..=14).contains(&mod100) {
+                "few"
+            } else if v == 0
+                && (mod10 == 0 || (5..=9).contains(&mod10) || (11..=14).contains(&mod100))
+            {
+                "many"
+            } else {
+                "other"
+            }
         }
         // Czech/Slovak
         "cs" | "sk" => {
-            if i == 1 && v == 0 { "one" }
-            else if (2..=4).contains(&i) && v == 0 { "few" }
-            else if v != 0 { "many" }
-            else { "other" }
+            if i == 1 && v == 0 {
+                "one"
+            } else if (2..=4).contains(&i) && v == 0 {
+                "few"
+            } else if v != 0 {
+                "many"
+            } else {
+                "other"
+            }
         }
         // Japanese, Chinese, Korean, Thai, Vietnamese: no plural forms
         "ja" | "zh" | "ko" | "th" | "vi" | "id" | "ms" => "other",
 
         _ => {
             // Default: English-like (one/other)
-            if i == 1 && v == 0 { "one" } else { "other" }
+            if i == 1 && v == 0 {
+                "one"
+            } else {
+                "other"
+            }
         }
     }
 }
@@ -549,10 +618,15 @@ fn plural_ordinal(n: u64, lang: &str) -> &'static str {
         "en" => {
             let mod10 = n % 10;
             let mod100 = n % 100;
-            if mod10 == 1 && mod100 != 11 { "one" }
-            else if mod10 == 2 && mod100 != 12 { "two" }
-            else if mod10 == 3 && mod100 != 13 { "few" }
-            else { "other" }
+            if mod10 == 1 && mod100 != 11 {
+                "one"
+            } else if mod10 == 2 && mod100 != 12 {
+                "two"
+            } else if mod10 == 3 && mod100 != 13 {
+                "few"
+            } else {
+                "other"
+            }
         }
         _ => "other",
     }
@@ -568,14 +642,26 @@ mod tests {
         let mut catalogs = Catalogs::new();
         let mut en = HashMap::new();
         en.insert("greet".to_string(), "Hello {name}".to_string());
-        en.insert("items".to_string(), "{count, plural, =0 {No items} one {# item} other {# items}}".to_string());
-        en.insert("gender".to_string(), "{g, select, male {He} female {She} other {They}}".to_string());
-        en.insert("ordinal".to_string(), "{n, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}".to_string());
+        en.insert(
+            "items".to_string(),
+            "{count, plural, =0 {No items} one {# item} other {# items}}".to_string(),
+        );
+        en.insert(
+            "gender".to_string(),
+            "{g, select, male {He} female {She} other {They}}".to_string(),
+        );
+        en.insert(
+            "ordinal".to_string(),
+            "{n, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}".to_string(),
+        );
         catalogs.insert("en".to_string(), en);
 
         let mut fr = HashMap::new();
         fr.insert("greet".to_string(), "Bonjour {name}".to_string());
-        fr.insert("items".to_string(), "{count, plural, =0 {Aucun élément} one {# élément} other {# éléments}}".to_string());
+        fr.insert(
+            "items".to_string(),
+            "{count, plural, =0 {Aucun élément} one {# élément} other {# éléments}}".to_string(),
+        );
         catalogs.insert("fr".to_string(), fr);
 
         catalogs
@@ -587,7 +673,10 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("name".to_string(), Value::String("Kaen".to_string()));
-        assert_eq!(translate(&catalogs, "greet", Some(&params), &chain, None), "Hello Kaen");
+        assert_eq!(
+            translate(&catalogs, "greet", Some(&params), &chain, None),
+            "Hello Kaen"
+        );
     }
 
     #[test]
@@ -606,7 +695,10 @@ mod tests {
         let chain = vec!["en".to_string()];
         // No params at all → `{name}` is preserved (not replaced with empty), so a
         // 2nd interpolation phase can fill it and a forgotten param stays visible.
-        assert_eq!(translate(&catalogs, "greet", None, &chain, None), "Hello {name}");
+        assert_eq!(
+            translate(&catalogs, "greet", None, &chain, None),
+            "Hello {name}"
+        );
         // Params present but missing the referenced key → same.
         let mut other = HashMap::new();
         other.insert("other".to_string(), Value::String("x".to_string()));
@@ -622,7 +714,10 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("count".to_string(), Value::Number(0.into()));
-        assert_eq!(translate(&catalogs, "items", Some(&params), &chain, None), "No items");
+        assert_eq!(
+            translate(&catalogs, "items", Some(&params), &chain, None),
+            "No items"
+        );
     }
 
     #[test]
@@ -631,7 +726,10 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("count".to_string(), Value::Number(1.into()));
-        assert_eq!(translate(&catalogs, "items", Some(&params), &chain, None), "1 item");
+        assert_eq!(
+            translate(&catalogs, "items", Some(&params), &chain, None),
+            "1 item"
+        );
     }
 
     #[test]
@@ -640,7 +738,10 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("count".to_string(), Value::Number(42.into()));
-        assert_eq!(translate(&catalogs, "items", Some(&params), &chain, None), "42 items");
+        assert_eq!(
+            translate(&catalogs, "items", Some(&params), &chain, None),
+            "42 items"
+        );
     }
 
     #[test]
@@ -649,14 +750,24 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("g".to_string(), Value::String("female".to_string()));
-        assert_eq!(translate(&catalogs, "gender", Some(&params), &chain, None), "She");
+        assert_eq!(
+            translate(&catalogs, "gender", Some(&params), &chain, None),
+            "She"
+        );
     }
 
     #[test]
     fn translates_selectordinal_english() {
         let catalogs = sample_catalogs();
         let chain = vec!["en".to_string()];
-        for (n, expected) in [(1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"), (11, "11th"), (21, "21st")] {
+        for (n, expected) in [
+            (1, "1st"),
+            (2, "2nd"),
+            (3, "3rd"),
+            (4, "4th"),
+            (11, "11th"),
+            (21, "21st"),
+        ] {
             let mut params = HashMap::new();
             params.insert("n".to_string(), Value::Number(n.into()));
             assert_eq!(
@@ -674,10 +785,16 @@ mod tests {
         let chain = vec!["fr".to_string()];
         let mut params = HashMap::new();
         params.insert("count".to_string(), Value::Number(0.into()));
-        assert_eq!(translate(&catalogs, "items", Some(&params), &chain, None), "Aucun élément");
+        assert_eq!(
+            translate(&catalogs, "items", Some(&params), &chain, None),
+            "Aucun élément"
+        );
 
         params.insert("count".to_string(), Value::Number(5.into()));
-        assert_eq!(translate(&catalogs, "items", Some(&params), &chain, None), "5 éléments");
+        assert_eq!(
+            translate(&catalogs, "items", Some(&params), &chain, None),
+            "5 éléments"
+        );
     }
 
     #[test]
@@ -686,21 +803,31 @@ mod tests {
         let chain = vec!["en".to_string()];
         let mut params = HashMap::new();
         params.insert("name".to_string(), Value::Null);
-        assert_eq!(translate(&catalogs, "greet", Some(&params), &chain, None), "Hello ");
+        assert_eq!(
+            translate(&catalogs, "greet", Some(&params), &chain, None),
+            "Hello "
+        );
     }
 
     #[test]
     fn falls_back_to_default() {
         let catalogs = sample_catalogs();
         let chain = vec!["es".to_string()];
-        assert_eq!(translate(&catalogs, "missing", None, &chain, Some("N/A")), "N/A");
+        assert_eq!(
+            translate(&catalogs, "missing", None, &chain, Some("N/A")),
+            "N/A"
+        );
     }
 
     #[test]
     fn has_key_works() {
         let catalogs = sample_catalogs();
         assert!(has_key(&catalogs, "greet", &["fr".to_string()]));
-        assert!(!has_key(&catalogs, "missing", &["fr".to_string(), "en".to_string()]));
+        assert!(!has_key(
+            &catalogs,
+            "missing",
+            &["fr".to_string(), "en".to_string()]
+        ));
     }
 
     // ─── audit regressions (RO1-RO5) ───────────────────────────────────────────
@@ -732,10 +859,19 @@ mod tests {
             ],
         );
         let chain = vec!["en".to_string()];
-        assert_eq!(translate(&c, "lit", None, &chain, None), "use { and } literally");
+        assert_eq!(
+            translate(&c, "lit", None, &chain, None),
+            "use { and } literally"
+        );
         assert_eq!(translate(&c, "apos", None, &chain, None), "o'clock");
         assert_eq!(
-            translate(&c, "mix", Some(&one("name", Value::String("X".into()))), &chain, None),
+            translate(
+                &c,
+                "mix",
+                Some(&one("name", Value::String("X".into()))),
+                &chain,
+                None
+            ),
             "{X}"
         );
     }
@@ -762,17 +898,29 @@ mod tests {
 
     #[test]
     fn ro4_kind_keyword_in_option_body() {
-        let c = cat("en", &[("k", "{x, select, a {pick select here} other {none}}")]);
+        let c = cat(
+            "en",
+            &[("k", "{x, select, a {pick select here} other {none}}")],
+        );
         let chain = vec!["en".to_string()];
         assert_eq!(
-            translate(&c, "k", Some(&one("x", Value::String("a".into()))), &chain, None),
+            translate(
+                &c,
+                "k",
+                Some(&one("x", Value::String("a".into()))),
+                &chain,
+                None
+            ),
             "pick select here"
         );
     }
 
     #[test]
     fn ro3_nested_plural_hash_not_cross_replaced() {
-        let c = cat("en", &[("n", "{a, plural, other {{b, plural, other {#}}}}")]);
+        let c = cat(
+            "en",
+            &[("n", "{a, plural, other {{b, plural, other {#}}}}")],
+        );
         let chain = vec!["en".to_string()];
         let mut p = HashMap::new();
         p.insert("a".to_string(), Value::Number(5.into()));
@@ -800,14 +948,29 @@ mod tests {
 
     #[test]
     fn ro5_portuguese_plural_one_is_zero_or_one() {
-        let c = cat("pt", &[("items", "{count, plural, one {# item} other {# itens}}")]);
+        let c = cat(
+            "pt",
+            &[("items", "{count, plural, one {# item} other {# itens}}")],
+        );
         let chain = vec!["pt".to_string()];
         assert_eq!(
-            translate(&c, "items", Some(&one("count", Value::Number(0.into()))), &chain, None),
+            translate(
+                &c,
+                "items",
+                Some(&one("count", Value::Number(0.into()))),
+                &chain,
+                None
+            ),
             "0 item"
         );
         assert_eq!(
-            translate(&c, "items", Some(&one("count", Value::Number(2.into()))), &chain, None),
+            translate(
+                &c,
+                "items",
+                Some(&one("count", Value::Number(2.into()))),
+                &chain,
+                None
+            ),
             "2 itens"
         );
     }
