@@ -921,6 +921,25 @@ function applySignificantPrecision(
 	if (token.endsWith("s")) options.roundingPriority = "lessPrecision";
 }
 
+/**
+ * The increments `Intl.NumberFormat` accepts for `roundingIncrement`.
+ *
+ * Declared `as const` so membership NARROWS to the literal union the option
+ * expects: a plain `Set<number>` type-checks inside rosetta but breaks every
+ * consumer compiling against the stricter lib, since `has()` proves nothing
+ * about the value's type.
+ */
+const SUPPORTED_INCREMENTS = [
+	1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000,
+] as const;
+
+/** Type guard narrowing a computed increment to a supported literal. */
+function isSupportedIncrement(
+	value: number,
+): value is (typeof SUPPORTED_INCREMENTS)[number] {
+	return SUPPORTED_INCREMENTS.some((allowed) => allowed === value);
+}
+
 function applyIncrementPrecision(
 	options: ExtendedNumberFormatOptions,
 	raw: string,
@@ -931,10 +950,7 @@ function applyIncrementPrecision(
 	}
 	const fractionDigits = raw.includes(".") ? raw.split(".")[1].length : 0;
 	const integerIncrement = Math.round(increment * 10 ** fractionDigits);
-	const supported = new Set([
-		1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000,
-	]);
-	if (!supported.has(integerIncrement)) {
+	if (!isSupportedIncrement(integerIncrement)) {
 		throw new SyntaxError(
 			`ICU rounding increment '${raw}' is not supported by Intl`,
 		);
