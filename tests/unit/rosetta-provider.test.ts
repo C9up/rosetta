@@ -117,12 +117,14 @@ describe("rosetta > RosettaProvider", () => {
 
 	it("does not hide failures from registered optional services", async () => {
 		const app = buildApp({ defaultLocale: "en" });
-		app.container.singleton("edge", () => {
-			throw new Error("edge initialization failed");
+		app.container.singleton("inker", () => {
+			throw new Error("inker initialization failed");
 		});
 		const provider = new RosettaProvider(app);
 		provider.register();
-		await expect(provider.boot()).rejects.toThrow("edge initialization failed");
+		await expect(provider.boot()).rejects.toThrow(
+			"inker initialization failed",
+		);
 	});
 
 	it("rolls back owned hooks when an integration fails during boot", async () => {
@@ -136,9 +138,9 @@ describe("rosetta > RosettaProvider", () => {
 			{
 				emitter: { emit: () => eventCount++ },
 				requestValidator: validator,
-				edge: {
+				inker: {
 					use() {
-						throw new Error("edge plugin failed");
+						throw new Error("inker plugin failed");
 					},
 				},
 			},
@@ -146,7 +148,7 @@ describe("rosetta > RosettaProvider", () => {
 		const provider = new RosettaProvider(app);
 		provider.register();
 
-		await expect(provider.boot()).rejects.toThrow("edge plugin failed");
+		await expect(provider.boot()).rejects.toThrow("inker plugin failed");
 		expect(validator.messagesProvider).toBe(previousProvider);
 		expect(getI18n()).toBeUndefined();
 
@@ -155,7 +157,7 @@ describe("rosetta > RosettaProvider", () => {
 		expect(eventCount).toBe(0);
 	});
 
-	it("connects optional emitter, request validator, and Edge services", async () => {
+	it("connects optional emitter, request validator, and template services", async () => {
 		const events: Array<{ name: string; payload: unknown }> = [];
 		const globals = new Map<string, unknown>();
 		const validator: { messagesProvider?: (context: never) => unknown } = {};
@@ -168,7 +170,7 @@ describe("rosetta > RosettaProvider", () => {
 					},
 				},
 				requestValidator: validator,
-				edge: {
+				inker: {
 					global(name: string, value: unknown) {
 						globals.set(name, value);
 					},
@@ -184,6 +186,31 @@ describe("rosetta > RosettaProvider", () => {
 		expect(events[0]?.name).toBe("i18n:missing:translation");
 		expect(validator.messagesProvider).toBeTypeOf("function");
 		expect(globals.get("t")).toBeTypeOf("function");
+	});
+
+	it("reaches the engine through the renderer the provider registers", async () => {
+		// `inker` is bound to an InkerRenderer, which publishes no globals of its
+		// own — the engine it wraps does. Resolving a token nothing registers
+		// meant the i18n globals never reached a template.
+		const globals = new Map<string, unknown>();
+		const app = buildApp(
+			{ defaultLocale: "en", messages: { en: {} } },
+			{
+				inker: {
+					render() {},
+					_templates: {
+						global(name: string, value: unknown) {
+							globals.set(name, value);
+						},
+					},
+				},
+			},
+		);
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await provider.boot();
+		expect(globals.get("t")).toBeTypeOf("function");
+		expect(globals.get("i18n")).toBeDefined();
 	});
 
 	it("registers the i18n REPL binding and load method", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@c9up/rosetta",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Rosetta \u2014 dedicated i18n module for the Ream ecosystem",
   "license": "MIT",
   "type": "module",
@@ -41,9 +41,9 @@
       "types": "./src/configure.ts",
       "import": "./src/configure.ts"
     },
-    "./plugins/edge": {
-      "types": "./src/plugins/edge.ts",
-      "import": "./src/plugins/edge.ts"
+    "./plugins/inker": {
+      "types": "./src/plugins/inker.ts",
+      "import": "./src/plugins/inker.ts"
     },
     "./repl": {
       "types": "./src/repl.ts",
@@ -107,9 +107,9 @@
         "types": "./dist/configure.d.ts",
         "import": "./dist/configure.js"
       },
-      "./plugins/edge": {
-        "types": "./dist/plugins/edge.d.ts",
-        "import": "./dist/plugins/edge.js"
+      "./plugins/inker": {
+        "types": "./dist/plugins/inker.d.ts",
+        "import": "./dist/plugins/inker.js"
       },
       "./repl": {
         "types": "./dist/repl.d.ts",

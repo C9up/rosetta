@@ -2,7 +2,7 @@ import { FileSystemLoader } from "./loaders/FileSystemLoader.js";
 import DetectUserLocaleMiddleware, {
 	type RequestValidatorLike,
 } from "./middleware.js";
-import { edgePluginI18n } from "./plugins/edge.js";
+import { inkerPluginI18n } from "./plugins/inker.js";
 import { Rosetta, type RosettaOptions } from "./Rosetta.js";
 import { type I18nReplLike, registerReplBindings } from "./repl.js";
 import { clearI18n, setI18n } from "./services/main.js";
@@ -55,6 +55,55 @@ export interface RosettaProviderConfig extends RosettaOptions {
  *   import i18n from '@c9up/rosetta/services/main'
  *   const t = i18n.locale('fr').t('greeting', { name: 'Alice' })
  */
+/** All rosetta needs of a template engine: a way to publish a global. */
+interface TemplateEngineLike {
+	global(name: string, value: unknown): void;
+}
+
+/** An engine that takes plugins instead — it publishes the globals itself. */
+interface PluggableEngine {
+	use(plugin: (engine: TemplateEngineLike) => void): void;
+}
+
+/**
+ * The `inker` container binding. It may be the engine itself, or — as the
+ * provider actually registers it — a renderer exposing the engine it wraps.
+ */
+interface InkerBinding {
+	_templates?: unknown;
+}
+
+function isPluggable(value: unknown): value is PluggableEngine {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof Reflect.get(value, "use") === "function"
+	);
+}
+
+function publishesGlobals(value: unknown): value is TemplateEngineLike {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof Reflect.get(value, "global") === "function"
+	);
+}
+
+/**
+ * Where to install the i18n plugin: the `inker` binding when it takes plugins
+ * or publishes globals, otherwise the engine it wraps. `undefined` when neither
+ * does, which simply means no template engine is installed.
+ */
+function inkerTargetOf(
+	binding: InkerBinding | undefined,
+): PluggableEngine | TemplateEngineLike | undefined {
+	for (const candidate of [binding, binding?._templates]) {
+		if (isPluggable(candidate)) return candidate;
+		if (publishesGlobals(candidate)) return candidate;
+	}
+	return undefined;
+}
+
 export default class RosettaProvider {
 	#booted = false;
 	#bootPromise?: Promise<void>;
@@ -133,19 +182,16 @@ export default class RosettaProvider {
 				this.#previousMessagesProvider = validator.messagesProvider;
 				DetectUserLocaleMiddleware.registerMessagesProvider(validator);
 			}
-			const edge = await this.#resolveOptional<{
-				use?(
-					plugin: (edge: {
-						global(name: string, value: unknown): void;
-					}) => void,
-				): void;
-				global?(name: string, value: unknown): void;
-			}>("edge");
-			if (edge) {
-				const plugin = edgePluginI18n(rosetta);
-				if (edge.use) edge.use(plugin);
-				else if (edge.global)
-					plugin(edge as { global(name: string, value: unknown): void });
+			// The container binds `inker` to a renderer that WRAPS the engine, so
+			// reach the engine through it when the binding itself publishes no
+			// globals. This used to resolve a token no provider ever registers,
+			// so the i18n globals never reached a template at all.
+			const binding = await this.#resolveOptional<InkerBinding>("inker");
+			const target = inkerTargetOf(binding);
+			if (target) {
+				const plugin = inkerPluginI18n(rosetta);
+				if (isPluggable(target)) target.use(plugin);
+				else plugin(target);
 			}
 			const repl = await this.#resolveOptional<I18nReplLike>("repl");
 			if (repl) registerReplBindings(repl, rosetta);
