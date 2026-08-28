@@ -239,15 +239,25 @@ function getMessageAst(message: string): MessageNode[] {
 }
 
 class MessageEvaluator {
+	readonly #source: string;
+	readonly #ast: MessageNode[];
+	readonly #locale: string;
+	readonly #data: Record<string, unknown>;
+
 	constructor(
-		private readonly source: string,
-		private readonly ast: MessageNode[],
-		private readonly locale: string,
-		private readonly data: Record<string, unknown>,
-	) {}
+		source: string,
+		ast: MessageNode[],
+		locale: string,
+		data: Record<string, unknown>,
+	) {
+		this.#source = source;
+		this.#ast = ast;
+		this.#locale = locale;
+		this.#data = data;
+	}
 
 	format(): string {
-		return this.#formatNodes(this.ast);
+		return this.#formatNodes(this.#ast);
 	}
 
 	#formatNodes(nodes: MessageNode[], poundValue?: number): string {
@@ -261,7 +271,7 @@ class MessageEvaluator {
 					case "pound":
 						return poundValue === undefined
 							? "#"
-							: getNumberFormatter(this.locale).format(poundValue);
+							: getNumberFormatter(this.#locale).format(poundValue);
 					case "select": {
 						const selected =
 							node.options[String(this.#value(node.name))] ??
@@ -272,7 +282,7 @@ class MessageEvaluator {
 					case "plural": {
 						const number = toFiniteNumber(this.#value(node.name));
 						const adjusted = number - node.offset;
-						const category = getPluralRules(this.locale, {
+						const category = getPluralRules(this.#locale, {
 							type: node.ordinal ? "ordinal" : "cardinal",
 						}).select(adjusted);
 						const selected =
@@ -286,14 +296,14 @@ class MessageEvaluator {
 						return formatIcuNumber(
 							this.#value(node.name),
 							node.style,
-							this.locale,
+							this.#locale,
 						);
 					case "dateTime":
 						return formatIcuDate(
 							this.#value(node.name),
 							node.style,
 							node.kind,
-							this.locale,
+							this.#locale,
 						);
 					default:
 						return assertNever(node);
@@ -303,12 +313,12 @@ class MessageEvaluator {
 	}
 
 	#value(identifier: string): unknown {
-		if (!Object.hasOwn(this.data, identifier)) {
+		if (!Object.hasOwn(this.#data, identifier)) {
 			throw new Error(
-				`The ICU variable '${identifier}' was not provided for message '${this.source}'`,
+				`The ICU variable '${identifier}' was not provided for message '${this.#source}'`,
 			);
 		}
-		return this.data[identifier];
+		return this.#data[identifier];
 	}
 }
 

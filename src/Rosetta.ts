@@ -351,10 +351,9 @@ export class I18nMessagesProvider {
 	readonly #messagesPrefix: string;
 	readonly #fieldsPrefix: string;
 
-	constructor(
-		prefix: string,
-		private readonly i18n: RosettaLocale,
-	) {
+	readonly #i18n: RosettaLocale;
+	constructor(prefix: string, i18n: RosettaLocale) {
+		this.#i18n = i18n;
 		this.#messagesPrefix = `${prefix}.messages`;
 		this.#fieldsPrefix = `${prefix}.fields`;
 	}
@@ -402,17 +401,17 @@ export class I18nMessagesProvider {
 			`${this.#messagesPrefix}.${context.wildCardPath}.${rule}`,
 			`${this.#messagesPrefix}.${rule}`,
 		]) {
-			const message = this.i18n.resolveIdentifier(identifier);
-			if (message) return this.i18n.formatRawMessage(message.message, data);
+			const message = this.#i18n.resolveIdentifier(identifier);
+			if (message) return this.#i18n.formatRawMessage(message.message, data);
 		}
 		return interpolateValidationMessage(defaultMessage, data);
 	}
 
 	translateField(name: string | number): string | number {
-		const message = this.i18n.resolveIdentifier(
+		const message = this.#i18n.resolveIdentifier(
 			`${this.#fieldsPrefix}.${name}`,
 		);
-		return message ? this.i18n.formatRawMessage(message.message) : name;
+		return message ? this.#i18n.formatRawMessage(message.message) : name;
 	}
 }
 
@@ -941,7 +940,7 @@ export class Rosetta {
 
 	async loadTranslations(): Promise<void> {
 		if (this.#hasCachedTranslations) return;
-		await this.reloadTranslations();
+		await this.#reloadTranslations();
 	}
 
 	async reloadTranslations(): Promise<void> {
