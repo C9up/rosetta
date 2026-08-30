@@ -3,7 +3,7 @@
  * Expected values are taken from the AdonisJS i18n documentation for
  * `new Formatter('en-US')`, so a drift in our output fails here.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Formatter } from "../../src/formatters/Formatter.js";
 import { Rosetta } from "../../src/Rosetta.js";
 
@@ -30,9 +30,40 @@ describe("Formatter (AdonisJS parity)", () => {
 	it("formats relative time, including the 'auto' unit", () => {
 		const formatter = new Formatter("en");
 		expect(formatter.formatRelativeTime(-1, "day")).toBe("1 day ago");
-		expect(
-			formatter.formatRelativeTime(new Date(Date.now() + 3_600_000), "auto"),
-		).toBe("in 1 hour");
+
+		// The clock is frozen because the formatter reads it again: with a live
+		// `Date.now()`, the microseconds between building the date and measuring
+		// the distance make it 59.99 minutes, and the floor says "in 59
+		// minutes". It passed on a fast machine and failed under load.
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+		try {
+			expect(
+				formatter.formatRelativeTime(new Date(Date.now() + 3_600_000), "auto"),
+			).toBe("in 1 hour");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reads a distance the same way whichever side of now it falls on", () => {
+		const formatter = new Formatter("en");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+		try {
+			// Ninety minutes ahead and ninety minutes behind. They do NOT read
+			// the same, because the rounding floors and a negative value floors
+			// away from zero. Upstream does this, and the strings are
+			// user-visible, so it is pinned rather than corrected.
+			expect(
+				formatter.formatRelativeTime(new Date(Date.now() + 5_400_000), "auto"),
+			).toBe("in 1 hour");
+			expect(
+				formatter.formatRelativeTime(new Date(Date.now() - 5_400_000), "auto"),
+			).toBe("2 hours ago");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("switchLocale re-points the instance and Intl follows", () => {

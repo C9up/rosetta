@@ -80,6 +80,16 @@ function normalizeDateTimeValue(value: DateTimeValue): Date | number {
 	return value.toMillis();
 }
 
+/**
+ * Pick the largest unit that still says something.
+ *
+ * `Math.floor` rounds a negative value AWAY from zero, so ninety minutes reads
+ * "in 1 hour" ahead and "2 hours ago" behind — the same distance answered two
+ * ways depending on its direction. That asymmetry is upstream's, kept
+ * deliberately: the rounding decides user-visible strings, and a migrated
+ * application whose timestamps started reading differently would have no way
+ * of knowing why.
+ */
 function formatRelativeAuto(
 	formatter: Intl.RelativeTimeFormat,
 	diffMs: number,
