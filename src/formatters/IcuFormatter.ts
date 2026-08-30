@@ -702,14 +702,15 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 		} else if (token.startsWith("measure-unit/")) {
 			assertSkeletonValue(token, "measure-unit/");
 			options.style = "unit";
-			const unit = token.slice("measure-unit/".length);
-			options.unit = unit.includes("-")
-				? unit.slice(unit.indexOf("-") + 1)
-				: unit;
+			options.unit = coreMeasureUnit(token.slice("measure-unit/".length));
 		} else if (token.startsWith("unit/")) {
 			assertSkeletonValue(token, "unit/");
 			options.style = "unit";
-			options.unit = token.slice("unit/".length);
+			// `unit/` is the short spelling of `measure-unit/` and takes the same
+			// identifier — `length-kilometer`, not `kilometer`. Passing the
+			// dimension prefix through reaches Intl as an unknown unit and
+			// throws, so it is dropped here as it is there.
+			options.unit = coreMeasureUnit(token.slice("unit/".length));
 		} else if (token.startsWith("per-measure-unit/")) {
 			assertSkeletonValue(token, "per-measure-unit/");
 			parsed.denominatorUnit = coreMeasureUnit(
