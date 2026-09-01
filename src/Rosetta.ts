@@ -298,10 +298,23 @@ export class RosettaLocale extends Formatter {
 		if (this.#emitter) {
 			const resolved = this.resolveIdentifier(key);
 			if (!resolved || resolved.isFallback) {
-				this.#emitter.emit("i18n:missing:translation", {
-					locale: this.locale,
-					identifier: key,
-					hasFallback: resolved?.isFallback ?? false,
+				// Called INSIDE the async function, not before it. An Adonis
+				// emitter's `emit` is async and rethrows when a listener fails
+				// and no error handler is registered, so a rejection here had
+				// nowhere to go — a missing-translation report ending the
+				// process over a string that merely fell back.
+				const emitter = this.#emitter;
+				void (async () =>
+					emitter.emit("i18n:missing:translation", {
+						locale: this.locale,
+						identifier: key,
+						hasFallback: resolved?.isFallback ?? false,
+					}))().catch((error: unknown) => {
+					process.stderr.write(
+						`[rosetta] 'i18n:missing:translation' listener failed: ${
+							error instanceof Error ? error.message : String(error)
+						}\n`,
+					);
 				});
 			}
 		}
