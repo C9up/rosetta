@@ -21,6 +21,13 @@ import {
 import type { RequestValidatorLike } from "../../src/middleware.js";
 import DetectUserLocaleMiddleware from "../../src/middleware.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 describe("rosetta > AdonisJS i18n compatibility", () => {
 	let root: string;
 
@@ -118,7 +125,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		expect(config.defaultLocale).toBe("en");
 		expect(Object.keys(config)).not.toContain("resolver");
 		expect(resolved.formatter(resolved)).toBeInstanceOf(IcuFormatter);
-		expect(resolved.loaders[0](resolved)).toBeInstanceOf(FileSystemLoader);
+		expect(defined(resolved.loaders[0])(resolved)).toBeInstanceOf(FileSystemLoader);
 	});
 
 	it("resolves custom non-callable config providers", async () => {
@@ -146,7 +153,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		const resolved = await config.resolver(app);
 
 		expect(resolved.formatter(resolved)).toBeInstanceOf(IcuFormatter);
-		const loader = resolved.loaders[0](resolved) as TranslationsLoaderContract;
+		const loader = defined(resolved.loaders[0])(resolved) as TranslationsLoaderContract;
 		expect(await loader.load()).toEqual({});
 	});
 
@@ -322,7 +329,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 
 	it("returns the active translations collection by reference", () => {
 		const manager = new Rosetta({ messages: { en: { hello: "Hello" } } });
-		manager.getTranslations().en.hello = "Changed";
+		defined(manager.getTranslations().en).hello = "Changed";
 		expect(manager.locale().t("hello")).toBe("Changed");
 	});
 

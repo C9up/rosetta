@@ -12,6 +12,13 @@ import {
 } from "../../src/CatalogCheck.js";
 import { Rosetta } from "../../src/Rosetta.js";
 
+/** Narrow away null/undefined without a `!` assertion (which lies to the compiler). */
+function defined<T>(value: T | null | undefined): T {
+	if (value == null) throw new Error("expected a defined value");
+	return value;
+}
+
+
 describe("checkCatalogs", () => {
 	it("reports nothing when every locale agrees", () => {
 		const findings = checkCatalogs({
@@ -74,8 +81,8 @@ describe("checkCatalogs", () => {
 			key: "items",
 			kind: "param-mismatch",
 		});
-		expect(findings[0].detail).toContain("n:plural");
-		expect(findings[0].detail).toContain("count:plural");
+		expect(defined(findings[0]).detail).toContain("n:plural");
+		expect(defined(findings[0]).detail).toContain("count:plural");
 
 		// Proof the drift is real: the fr message throws on the en call site.
 		const i18n = new Rosetta({ defaultLocale: "en" }).locale("fr");
@@ -94,7 +101,7 @@ describe("checkCatalogs", () => {
 		);
 		expect(findings).toHaveLength(1);
 		expect(findings[0]).toMatchObject({ kind: "param-mismatch", key: "total" });
-		expect(findings[0].detail).toContain("amount:text");
+		expect(defined(findings[0]).detail).toContain("amount:text");
 	});
 
 	it("reports invalid ICU instead of throwing, so one bad message keeps the report", () => {

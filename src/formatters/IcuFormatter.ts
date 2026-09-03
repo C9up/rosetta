@@ -607,13 +607,13 @@ function parseOptions(
 				);
 			}
 			index += match[0].length;
-			if (index < source.length && !/\s/.test(source[index])) {
+			if (index < source.length && !/\s/.test(source[index] ?? "")) {
 				throw new SyntaxError("Invalid ICU plural offset delimiter");
 			}
 			continue;
 		}
 		const keyStart = index;
-		while (index < source.length && !/[\s{]/.test(source[index])) index++;
+		while (index < source.length && !/[\s{]/.test(source[index] ?? "")) index++;
 		const key = source.slice(keyStart, index);
 		while (/\s/.test(source[index] ?? "")) index++;
 		if (!key || source[index] !== "{") {
@@ -906,7 +906,7 @@ function applyFractionPrecision(
 	token: string,
 ): void {
 	const [precision, significant] = token.split("/");
-	const body = precision.slice(1);
+	const body = (precision ?? "").slice(1);
 	const zeros = body.match(/^0*/)?.[0].length ?? 0;
 	options.minimumFractionDigits = zeros;
 	if (body.endsWith("*") || body.endsWith("+"))
@@ -959,7 +959,8 @@ function applyIncrementPrecision(
 	if (!Number.isFinite(increment) || increment <= 0) {
 		throw new SyntaxError(`Invalid ICU rounding increment '${raw}'`);
 	}
-	const fractionDigits = raw.includes(".") ? raw.split(".")[1].length : 0;
+	const [, fraction] = raw.split(".");
+	const fractionDigits = fraction?.length ?? 0;
 	const integerIncrement = Math.round(increment * 10 ** fractionDigits);
 	if (!isSupportedIncrement(integerIncrement)) {
 		throw new SyntaxError(
@@ -1047,9 +1048,8 @@ function formatNumberSkeleton(
 		let insertion = exponentSeparator;
 		if (insertion < 0) {
 			let lastInteger = -1;
-			for (let index = 0; index < parts.length; index++) {
-				if (["integer", "group"].includes(parts[index].type))
-					lastInteger = index;
+			for (const [index, part] of parts.entries()) {
+				if (["integer", "group"].includes(part.type)) lastInteger = index;
 			}
 			insertion = lastInteger < 0 ? parts.length : lastInteger + 1;
 		}
@@ -1081,8 +1081,8 @@ function transformExponentParts(
 	const exponentIndex = parts.findIndex(
 		(part) => part.type === "exponentInteger",
 	);
-	if (exponentIndex < 0) return;
 	const exponentPart = parts[exponentIndex];
+	if (exponentPart === undefined) return;
 	exponentPart.value = exponentPart.value.padStart(
 		parsed.minimumExponentDigits,
 		"0",

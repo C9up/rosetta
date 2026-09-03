@@ -45,21 +45,38 @@ export interface CheckCatalogsOptions {
 }
 
 function levenshtein(a: string, b: string): number {
-	const dp = Array.from({ length: b.length + 1 }, (_, i) => i);
+	let previous: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
 	for (let i = 1; i <= a.length; i++) {
-		let prev = dp[0];
-		dp[0] = i;
+		const current: number[] = [i];
 		for (let j = 1; j <= b.length; j++) {
-			const tmp = dp[j];
-			dp[j] = Math.min(
-				dp[j] + 1,
-				dp[j - 1] + 1,
-				prev + (a[i - 1] === b[j - 1] ? 0 : 1),
+			current.push(
+				Math.min(
+					cell(previous, j) + 1,
+					cell(current, j - 1) + 1,
+					cell(previous, j - 1) + (a[i - 1] === b[j - 1] ? 0 : 1),
+				),
 			);
-			prev = tmp;
 		}
+		previous = current;
 	}
-	return dp[b.length];
+	return cell(previous, b.length);
+}
+
+/**
+ * One cell of a row that has already been filled.
+ *
+ * Rows are built left to right and every column is written before it is read,
+ * so a miss cannot happen — this is where that invariant is stated rather than
+ * asserted past.
+ */
+function cell(row: number[], index: number): number {
+	const value = row[index];
+	if (value === undefined) {
+		throw new RangeError(
+			`distance: column ${index} was read before it was written`,
+		);
+	}
+	return value;
 }
 
 /** Closest candidate within edit distance 2 (typo suggestion), else undefined. */
@@ -146,13 +163,18 @@ export function checkCatalogs(
 	// The reference locale is checked for ICU validity too — it is the source of
 	// truth for variables, so a broken message there poisons every comparison.
 	for (const key of referenceKeys) {
-		const params = paramsOf(reference, key, referenceCatalog[key], findings);
+		const params = paramsOf(
+			reference,
+			key,
+			referenceCatalog[key] ?? "",
+			findings,
+		);
 		if (params) referenceParams.set(key, params);
 	}
 
 	for (const locale of locales) {
 		if (locale === reference) continue;
-		const catalog = translations[locale];
+		const catalog = translations[locale] ?? {};
 		const localeKeys = new Set(Object.keys(catalog));
 
 		for (const key of referenceKeys) {
@@ -167,7 +189,7 @@ export function checkCatalogs(
 		}
 
 		for (const key of localeKeys) {
-			const params = paramsOf(locale, key, catalog[key], findings);
+			const params = paramsOf(locale, key, catalog[key] ?? "", findings);
 
 			if (!(key in referenceCatalog)) {
 				findings.push({

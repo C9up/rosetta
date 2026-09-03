@@ -936,7 +936,8 @@ export class Rosetta {
 			const supported = Intl.NumberFormat.supportedLocalesOf([candidate], {
 				localeMatcher: "lookup",
 			});
-			if (supported.length > 0) return supported[0];
+			const [best] = supported;
+			if (best !== undefined) return best;
 		}
 		// Last-resort: the configured #defaultLocale itself may not be
 		// Intl-supported (e.g. an invented private-use tag). Validate
@@ -945,7 +946,8 @@ export class Rosetta {
 			[this.#defaultLocale],
 			{ localeMatcher: "lookup" },
 		);
-		if (defaultSupported.length > 0) return defaultSupported[0];
+		const [fallback] = defaultSupported;
+		if (fallback !== undefined) return fallback;
 		// Truly unresolvable — fall back to "en", which every Intl
 		// implementation must support per ECMA-402.
 		return "en";
@@ -1025,9 +1027,9 @@ export class Rosetta {
 				string,
 				MessageTree | MessageCatalog
 			>;
-			for (let index = 0; index < locales.length; index++) {
+			for (const [index, locale] of locales.entries()) {
 				const localeMessages = messages[index];
-				if (localeMessages) translations[locales[index]] = localeMessages;
+				if (localeMessages) translations[locale] = localeMessages;
 			}
 			return translations;
 		}
@@ -1062,11 +1064,12 @@ export class Rosetta {
 		key: string,
 		chain: string[],
 	): "primary" | "fallback" | "missing" {
-		if (this.#messages[chain[0]]?.[key] !== undefined) {
+		const [primary, ...rest] = chain;
+		if (primary !== undefined && this.#messages[primary]?.[key] !== undefined) {
 			return "primary";
 		}
-		for (let i = 1; i < chain.length; i++) {
-			if (this.#messages[chain[i]]?.[key] !== undefined) {
+		for (const locale of rest) {
+			if (this.#messages[locale]?.[key] !== undefined) {
 				return "fallback";
 			}
 		}
@@ -1137,7 +1140,7 @@ function parseLanguagePreferences(header: string): LanguagePreference[] {
 					quality = Number(trimmed.slice(2));
 				}
 			}
-			return { locale: normalizeLocale(localePart), quality, order };
+			return { locale: normalizeLocale(localePart ?? ""), quality, order };
 		})
 		.filter(
 			(entry) =>

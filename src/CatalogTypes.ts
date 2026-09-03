@@ -107,7 +107,7 @@ export function generateCatalogTypes(
 	if (catalog) {
 		for (const key of Object.keys(catalog).sort()) {
 			try {
-				const params = extractMessageParams(catalog[key]);
+				const params = extractMessageParams(catalog[key] ?? "");
 				lines.push(`\t\t${quote(key)}: ${renderParams(params)}`);
 			} catch {
 				skipped.push(key);

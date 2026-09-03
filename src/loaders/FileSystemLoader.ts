@@ -333,15 +333,20 @@ function nest(
 	value: MessageTree | MessageCatalog,
 ): MessageTree {
 	const root: MessageTree = {};
+	// The last segment is the one written; everything before it is walked.
+	// Split off by name so neither has to be read back out of the array.
+	const path = [...segments];
+	const last = path.pop();
+	if (last === undefined) return root;
 	let node = root;
-	for (let i = 0; i < segments.length - 1; i++) {
-		assertSafeKey(segments[i]);
+	for (const segment of path) {
+		assertSafeKey(segment);
 		const child: MessageTree = {};
-		node[segments[i]] = child;
+		node[segment] = child;
 		node = child;
 	}
-	assertSafeKey(segments[segments.length - 1]);
-	node[segments[segments.length - 1]] = value;
+	assertSafeKey(last);
+	node[last] = value;
 	return root;
 }
 
@@ -405,6 +410,9 @@ function parseYaml(input: string): MessageTree {
 	while (i < lines.length) {
 		const rawLine = lines[i];
 		i++;
+		// `i` was bounded by the loop condition before the increment, so this
+		// cannot fire — it is where that bound is stated.
+		if (rawLine === undefined) break;
 		if (!rawLine.trim() || rawLine.trim().startsWith("#")) continue;
 		if (/^\s*\t/.test(rawLine)) {
 			throw new SyntaxError(`Tabs are not valid YAML indentation on line ${i}`);
@@ -438,10 +446,14 @@ function parseYaml(input: string): MessageTree {
 			);
 		}
 
-		while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
+		let top = stack.at(-1);
+		while (stack.length > 1 && top !== undefined && indent <= top.indent) {
 			stack.pop();
+			top = stack.at(-1);
 		}
-		const parent = stack[stack.length - 1].node;
+		// The stack is seeded with a root frame and only ever popped down to it.
+		if (top === undefined) throw new SyntaxError("YAML parser lost its root");
+		const parent = top.node;
 		if (Object.hasOwn(parent, key)) {
 			throw new SyntaxError(`Duplicate YAML key '${key}'`);
 		}
@@ -504,7 +516,7 @@ function findYamlMappingDelimiter(line: string): number {
 		if (
 			!quote &&
 			char === ":" &&
-			(index === line.length - 1 || /\s/.test(line[index + 1]))
+			(index === line.length - 1 || /\s/.test(line[index + 1] ?? ""))
 		) {
 			return index;
 		}
@@ -527,6 +539,7 @@ function parseBlockScalar(
 	let i = startIndex;
 	while (i < lines.length) {
 		const bl = lines[i];
+		if (bl === undefined) break;
 		// A line with less indent (or empty after content) ends the block.
 		const lineIndent = bl.search(/\S/);
 		if (bl.trim() && lineIndent <= indent) break;
@@ -535,7 +548,7 @@ function parseBlockScalar(
 		i++;
 	}
 	// Trim trailing empty lines.
-	while (blockLines.length > 0 && blockLines[blockLines.length - 1] === "") {
+	while (blockLines.length > 0 && blockLines.at(-1) === "") {
 		blockLines.pop();
 	}
 	return {
