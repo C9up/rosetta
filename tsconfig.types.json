@@ -4,5 +4,12 @@
   // fixture's global `TranslationKeys` augmentation cannot leak into the normal
   // typecheck. Inheriting that exclusion here would silently compile nothing.
   "exclude": ["node_modules", "dist"],
+  "compilerOptions": {
+    // Every assertion in the fixture IS an unused type alias — that is how a
+    // compile-time expectation is written. Inheriting `noUnusedLocals` turned
+    // all thirteen of them into TS6196 errors, so this project never once
+    // compiled clean and the typed-key guarantee went unchecked.
+    "noUnusedLocals": false
+  },
   "include": ["src/**/*.ts", "tests/types/**/*.ts"]
 }

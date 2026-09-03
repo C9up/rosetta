@@ -191,7 +191,7 @@ export function checkCatalogs(
 		for (const key of localeKeys) {
 			const params = paramsOf(locale, key, catalog[key] ?? "", findings);
 
-			if (!(key in referenceCatalog)) {
+			if (!Object.hasOwn(referenceCatalog, key)) {
 				findings.push({
 					locale,
 					key,

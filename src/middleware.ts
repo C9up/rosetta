@@ -42,10 +42,28 @@ export default class DetectUserLocaleMiddleware {
 	}
 
 	protected getRequestLocale(context: I18nHttpContext): string {
+		// The host negotiating our own list against the intact header. Nothing
+		// beats it, so it is asked first.
 		const negotiated = context.request?.language?.(
 			this.manager.supportedLocales(),
 		);
 		if (negotiated) return negotiated;
+
+		// The raw header before `languages()`, deliberately. A host's
+		// `languages()` hands back names with their qvalues already spent: a
+		// refused `en;q=0` has been dropped from the list, and everything left
+		// reads as an equal first choice — so `en;q=0, *` arrives as a bare
+		// wildcard and answers with the one language the client ruled out.
+		// Reading the header keeps those weights for the negotiation below.
+		const raw =
+			context.request?.header?.("accept-language") ??
+			context.request?.headers?.["accept-language"];
+		const header = Array.isArray(raw) ? raw.join(",") : raw;
+		if (header) {
+			return (
+				this.manager.getSupportedLocaleFor(header) ?? this.manager.defaultLocale
+			);
+		}
 
 		const accepted = context.request?.languages?.();
 		if (accepted?.length) {
@@ -55,13 +73,7 @@ export default class DetectUserLocaleMiddleware {
 			);
 		}
 
-		const raw =
-			context.request?.header?.("accept-language") ??
-			context.request?.headers?.["accept-language"];
-		const header = Array.isArray(raw) ? raw.join(",") : (raw ?? "");
-		return (
-			this.manager.getSupportedLocaleFor(header) ?? this.manager.defaultLocale
-		);
+		return this.manager.defaultLocale;
 	}
 
 	async handle(

@@ -36,6 +36,9 @@ jobs:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
+      # The typed-key assertions. They are compile-time only, so nothing
+      # else in this job would notice them regressing.
+      - run: pnpm test:types
       - run: pnpm lint
       - run: pnpm test:browser
       - run: pnpm test

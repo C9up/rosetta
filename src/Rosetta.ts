@@ -601,7 +601,7 @@ export class Rosetta {
 	}
 
 	getTranslationsFor(locale: string): MessageCatalog {
-		return this.#messages[normalizeLocale(locale)] ?? {};
+		return this.#messages[normalizeLocale(locale)] ?? emptyCatalog();
 	}
 
 	getFormatter(): TranslationsFormatterContract {
@@ -707,11 +707,11 @@ export class Rosetta {
 	}
 
 	/**
-	 * AdonisJS-compatible alias for {@link resolveLocale}. Accepts a raw
-	 * `accept-language` string or an array of preferred languages and returns
-	 * the best supported locale. Unlike Adonis (which returns `null` on no
-	 * match), Rosetta falls back to the default-locale chain — matching
-	 * `resolveLocale`'s always-resolve contract.
+	 * The best supported locale for a raw `accept-language` string or an array
+	 * of preferred languages, or `null` when the client accepts none of them —
+	 * AdonisJS's contract, and what makes the `?? defaultLocale` in the locale
+	 * middleware the place that decides what to do about it. {@link
+	 * resolveLocale} is the always-resolve form.
 	 */
 	getSupportedLocaleFor(userLanguage: string | string[]): string | null {
 		return negotiateLanguage(
@@ -1003,7 +1003,7 @@ export class Rosetta {
 			.map(flattenMessages);
 		if (catalogs.length === 0) return;
 
-		const merged = { ...(this.#messages[locale] ?? {}) };
+		const merged = Object.assign(emptyCatalog(), this.#messages[locale]);
 		for (const catalog of catalogs) Object.assign(merged, catalog);
 		this.#messages[locale] = merged;
 	}
@@ -1117,7 +1117,9 @@ function uniqueLocales(locales: readonly string[]): string[] {
 }
 
 function parseAcceptLanguage(header: string): string[] {
-	return parseLanguagePreferences(header).map((entry) => entry.locale);
+	return parseLanguagePreferences(header)
+		.filter((entry) => entry.quality > 0)
+		.map((entry) => entry.locale);
 }
 
 interface LanguagePreference {
@@ -1126,6 +1128,14 @@ interface LanguagePreference {
 	order: number;
 }
 
+/**
+ * Parse an `accept-language` header, refusals included.
+ *
+ * A `q=0` entry has to survive parsing. `en;q=0, *` says "anything but
+ * English", and a parser that drops the refused entry leaves the wildcard free
+ * to pick English straight back up. {@link negotiateLanguage} is what discards
+ * it — after it has had its chance to zero out its own locale.
+ */
 function parseLanguagePreferences(header: string): LanguagePreference[] {
 	return header
 		.split(",")
@@ -1137,85 +1147,109 @@ function parseLanguagePreferences(header: string): LanguagePreference[] {
 			for (const part of rest) {
 				const trimmed = part.trim();
 				if (trimmed.toLowerCase().startsWith("q=")) {
-					quality = Number(trimmed.slice(2));
+					quality = parseQuality(trimmed.slice(2));
 				}
 			}
 			return { locale: normalizeLocale(localePart ?? ""), quality, order };
 		})
-		.filter(
-			(entry) =>
-				entry.locale.length > 0 && entry.quality > 0 && entry.quality <= 1,
-		)
+		.filter((entry) => entry.locale.length > 0)
 		.sort((a, b) => b.quality - a.quality || a.order - b.order);
 }
 
+/**
+ * A qvalue. Unparsable reads as a refusal; out of range is left alone.
+ *
+ * Upstream runs the token through `parseFloat` and filters on `q > 0`, so junk
+ * becomes NaN and excludes its language exactly as `q=0` does — zero says that
+ * in a number the comparisons can handle. A value above 1 is not a qvalue per
+ * RFC 9110, but rejecting the entry loses the preference the client shouted
+ * loudest, so it is kept and simply outranks the rest, as upstream keeps it.
+ */
+function parseQuality(raw: string): number {
+	const value = Number.parseFloat(raw);
+	return Number.isFinite(value) ? value : 0;
+}
+
+interface LanguageMatch {
+	locale: string;
+	quality: number;
+	specificity: number;
+	requestOrder: number;
+	supportedOrder: number;
+}
+
+/**
+ * Pick the supported locale an `accept-language` header asks for.
+ *
+ * The order of the two loops is the whole algorithm, and it is not the obvious
+ * one: each supported locale first takes its quality from the MOST SPECIFIC
+ * header entry that matches it, and only then are the locales ranked against
+ * one another. Ranking every (entry, locale) pair by quality instead lets
+ * `*;q=0.9` outbid the `en;q=0.1` written right beside it — and turns
+ * `en;q=0`, which is a refusal, into English served to a client that asked for
+ * anything else.
+ */
 function negotiateLanguage(
 	header: string,
 	supportedLocales: readonly string[],
 ): string | null {
-	const supported = supportedLocales.map((locale, order) => ({
-		original: locale,
-		normalized: normalizeLocale(locale),
-		order,
-	}));
-	let best:
-		| {
-				locale: string;
-				quality: number;
-				specificity: number;
-				requestOrder: number;
-				supportedOrder: number;
-		  }
-		| undefined;
+	const requested = parseLanguagePreferences(header);
+	let best: LanguageMatch | undefined;
 
-	for (const requested of parseLanguagePreferences(header)) {
-		for (const candidate of supported) {
-			const specificity = languageMatchSpecificity(
-				requested.locale,
-				candidate.normalized,
-			);
+	for (const [supportedOrder, original] of supportedLocales.entries()) {
+		const normalized = normalizeLocale(original);
+		let chosen:
+			| { quality: number; specificity: number; order: number }
+			| undefined;
+		for (const entry of requested) {
+			const specificity = languageMatchSpecificity(entry.locale, normalized);
 			if (specificity < 0) continue;
-			const match = {
-				locale: candidate.original,
-				quality: requested.quality,
-				specificity,
-				requestOrder: requested.order,
-				supportedOrder: candidate.order,
-			};
-			if (!best || compareLanguageMatches(match, best) > 0) best = match;
+			if (
+				!chosen ||
+				specificity > chosen.specificity ||
+				(specificity === chosen.specificity && entry.quality > chosen.quality)
+			) {
+				chosen = { quality: entry.quality, specificity, order: entry.order };
+			}
 		}
+		// Nothing matched, or what matched most precisely was a refusal.
+		if (chosen === undefined || chosen.quality <= 0) continue;
+		const match: LanguageMatch = {
+			locale: original,
+			quality: chosen.quality,
+			specificity: chosen.specificity,
+			requestOrder: chosen.order,
+			supportedOrder,
+		};
+		if (!best || compareLanguageMatches(match, best) > 0) best = match;
 	}
 	return best?.locale ?? null;
 }
 
+/**
+ * How well a header entry matches a supported locale, on upstream's scale:
+ * exact, then the header being the more specific of the two (`en-GB` asked,
+ * `en` offered), then the offer being the more specific one (`en` asked,
+ * `en-GB` offered), then the `*` wildcard. `-1` is no match.
+ *
+ * The two middle tiers are deliberately not the same rank. Answering `en-GB`
+ * with `en` hands back the language the client named; answering `en` with
+ * `en-GB` guesses at a region it never mentioned.
+ */
 function languageMatchSpecificity(
 	requested: string,
 	supported: string,
 ): number {
 	if (requested === "*") return 0;
-	if (requested === supported) return 2;
-	if (
-		requested.startsWith(`${supported}-`) ||
-		supported.startsWith(`${requested}-`)
-	) {
-		return 1;
-	}
+	if (requested === supported) return 4;
+	if (requested.startsWith(`${supported}-`)) return 2;
+	if (supported.startsWith(`${requested}-`)) return 1;
 	return -1;
 }
 
 function compareLanguageMatches(
-	left: {
-		quality: number;
-		specificity: number;
-		requestOrder: number;
-		supportedOrder: number;
-	},
-	right: {
-		quality: number;
-		specificity: number;
-		requestOrder: number;
-		supportedOrder: number;
-	},
+	left: LanguageMatch,
+	right: LanguageMatch,
 ): number {
 	return (
 		left.quality - right.quality ||
@@ -1225,10 +1259,25 @@ function compareLanguageMatches(
 	);
 }
 
+/**
+ * A catalog is a lookup table for keys the application chose, so it must not
+ * also answer for the ones every object inherits.
+ *
+ * Without this, `has("toString")` is true in a locale with no catalog at all,
+ * and `resolveIdentifier("valueOf")` hands back a native function through a
+ * signature that promises a string. Upstream builds its catalogs out of plain
+ * object literals and has the same hole; the ICU parser in this package
+ * already closes it on its own option maps, and this is the same fix one layer
+ * up.
+ */
+function emptyCatalog(): MessageCatalog {
+	return Object.create(null) as MessageCatalog;
+}
+
 function flattenMessages(
 	messages: MessageTree | MessageCatalog,
 ): MessageCatalog {
-	const out = Object.create(null) as MessageCatalog;
+	const out = emptyCatalog();
 	walkFlatten("", messages, out, 0, { keys: 0 });
 	return out;
 }
@@ -1308,8 +1357,11 @@ function mergeMessagesInto(
 	messages: MessageTree | MessageCatalog,
 ): void {
 	const normalizedLocale = normalizeLocale(locale);
-	const existing = target[normalizedLocale] ?? {};
-	target[normalizedLocale] = { ...existing, ...flattenMessages(messages) };
+	target[normalizedLocale] = Object.assign(
+		emptyCatalog(),
+		target[normalizedLocale],
+		flattenMessages(messages),
+	);
 }
 
 function mergeTranslationsInto(
