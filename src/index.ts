@@ -2,6 +2,8 @@
  * @c9up/rosetta — framework-agnostic internationalization module.
  */
 
+import "./augmentations.js";
+
 export type {
 	FileSystemLoaderOptions,
 	FsLoaderOptions,

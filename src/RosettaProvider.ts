@@ -1,3 +1,4 @@
+import "./augmentations.js";
 import { FileSystemLoader } from "./loaders/FileSystemLoader.js";
 import DetectUserLocaleMiddleware, {
 	type RequestValidatorLike,
