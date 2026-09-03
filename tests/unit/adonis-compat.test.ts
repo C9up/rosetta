@@ -27,7 +27,6 @@ function defined<T>(value: T | null | undefined): T {
 	return value;
 }
 
-
 describe("rosetta > AdonisJS i18n compatibility", () => {
 	let root: string;
 
@@ -125,7 +124,9 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		expect(config.defaultLocale).toBe("en");
 		expect(Object.keys(config)).not.toContain("resolver");
 		expect(resolved.formatter(resolved)).toBeInstanceOf(IcuFormatter);
-		expect(defined(resolved.loaders[0])(resolved)).toBeInstanceOf(FileSystemLoader);
+		expect(defined(resolved.loaders[0])(resolved)).toBeInstanceOf(
+			FileSystemLoader,
+		);
 	});
 
 	it("resolves custom non-callable config providers", async () => {
@@ -153,7 +154,9 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		const resolved = await config.resolver(app);
 
 		expect(resolved.formatter(resolved)).toBeInstanceOf(IcuFormatter);
-		const loader = defined(resolved.loaders[0])(resolved) as TranslationsLoaderContract;
+		const loader = defined(resolved.loaders[0])(
+			resolved,
+		) as TranslationsLoaderContract;
 		expect(await loader.load()).toEqual({});
 	});
 

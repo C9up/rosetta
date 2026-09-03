@@ -18,7 +18,6 @@ function defined<T>(value: T | null | undefined): T {
 	return value;
 }
 
-
 describe("checkCatalogs", () => {
 	it("reports nothing when every locale agrees", () => {
 		const findings = checkCatalogs({
