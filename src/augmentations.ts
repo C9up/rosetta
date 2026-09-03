@@ -23,6 +23,11 @@ import type { Rosetta } from "./Rosetta.js";
 declare module "@c9up/ream/types" {
 	interface ContainerBindings {
 		/** Translations, under the name the framework uses. */
+		"rosetta.i18n": Rosetta;
+		/**
+		 * The same binding under the name it had before the token carried its
+		 * package. Kept bound so an existing `container.make(...)` resolves.
+		 */
 		i18n: Rosetta;
 		/** Translations, under this package's own name. */
 		rosetta: Rosetta;

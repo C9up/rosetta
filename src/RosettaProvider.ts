@@ -137,6 +137,14 @@ export default class RosettaProvider {
 			}
 			return new Rosetta(options);
 		});
+		// Namespaced by the package that owns it, the way upstream namespaces
+		// `lucid.db`, `auth.manager` and `drive.manager` by theirs. The bare
+		// token stays bound beside it: it is what every existing
+		// `container.make(...)` asks for, and a token is not worth breaking an
+		// application over.
+		this.app.container.singleton("rosetta.i18n", async () =>
+			this.app.container.resolve<Rosetta>(Rosetta),
+		);
 		this.app.container.singleton("i18n", async () =>
 			this.app.container.resolve<Rosetta>(Rosetta),
 		);
