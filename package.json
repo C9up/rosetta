@@ -1,6 +1,6 @@
 {
   "name": "@c9up/rosetta",
-  "version": "0.3.4",
+  "version": "0.3.3",
   "description": "Rosetta \u2014 dedicated i18n module for the Ream ecosystem",
   "license": "MIT",
   "type": "module",
