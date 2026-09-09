@@ -730,6 +730,35 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		).toBe("The title must have at least 3 characters");
 	});
 
+	it("interpolates a mustache default message too", () => {
+		// The message that reaches the fallback is the VALIDATOR's own default
+		// template, and it is written in mustache. Reading only `{ field }`
+		// matched the inside of the pair and left the outer braces standing, so
+		// an untranslated rule rendered as `The {title} field ...` — visible to
+		// the end user, on every rule the app had not translated yet.
+		const provider = new Rosetta().locale("en").createMessagesProvider();
+		expect(
+			provider.getMessage(
+				"The {{ field }} field must have at least {{ min }} characters",
+				"minLength",
+				{ name: "title", wildCardPath: "title" },
+				{ min: 3 },
+			),
+		).toBe("The title field must have at least 3 characters");
+	});
+
+	it("leaves a placeholder it has no value for alone, in either spelling", () => {
+		// Blanking it would hide the gap; leaving it makes the missing datum
+		// legible in the message itself.
+		const provider = new Rosetta().locale("en").createMessagesProvider();
+		expect(
+			provider.getMessage("{{ nope }} and {alsoNope}", "r", {
+				name: "f",
+				wildCardPath: "f",
+			}),
+		).toBe("{{ nope }} and {alsoNope}");
+	});
+
 	it("middleware shares a request-scoped locale", async () => {
 		const manager = new Rosetta({
 			defaultLocale: "en",

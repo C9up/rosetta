@@ -428,24 +428,44 @@ export class I18nMessagesProvider {
 	}
 }
 
+/**
+ * Fill the placeholders of a message no catalogue had a translation for.
+ *
+ * Two spellings, because two authors write these. A translation in a Rosetta
+ * catalogue is written by the application and uses `{ field }`. The message
+ * that reaches this function instead is the validator's own DEFAULT template,
+ * written by the validation package in mustache — `{{ field }}`. Reading only
+ * the single-brace form matched the INSIDE of a mustache pair and left the
+ * outer braces standing, so an untranslated rule rendered as
+ * `The {name} field must have at least {4} characters`.
+ */
 function interpolateValidationMessage(
 	message: string,
 	data: Record<string, unknown>,
 ): string {
-	return message.replace(/\{\s*([\w.]+)\s*\}/g, (placeholder, path: string) => {
-		let value: unknown = data;
-		for (const segment of path.split(".")) {
-			if (
-				!value ||
-				typeof value !== "object" ||
-				!Object.hasOwn(value, segment)
-			) {
-				return placeholder;
+	// The mustache alternative comes first so it wins on `{{ x }}`; a regex
+	// alternation is ordered, and the single-brace branch would otherwise
+	// match the inner half.
+	const PLACEHOLDER = /\{\{\s*([\w.]+)\s*\}\}|\{\s*([\w.]+)\s*\}/g;
+	return message.replace(
+		PLACEHOLDER,
+		(placeholder, mustache: string | undefined, brace: string | undefined) => {
+			const path = mustache ?? brace;
+			if (path === undefined) return placeholder;
+			let value: unknown = data;
+			for (const segment of path.split(".")) {
+				if (
+					!value ||
+					typeof value !== "object" ||
+					!Object.hasOwn(value, segment)
+				) {
+					return placeholder;
+				}
+				value = (value as Record<string, unknown>)[segment];
 			}
-			value = (value as Record<string, unknown>)[segment];
-		}
-		return value === null || value === undefined ? "" : String(value);
-	});
+			return value === null || value === undefined ? "" : String(value);
+		},
+	);
 }
 
 /**
