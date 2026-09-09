@@ -634,7 +634,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		expect([en, fr]).toEqual(["EN", "FR"]);
 	});
 
-	it("exposes a Vine-shaped messages provider", () => {
+	it("exposes a messages provider matching rune's contract", () => {
 		const manager = new Rosetta({
 			messages: {
 				en: {
@@ -658,7 +658,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		).toBe("Enter email address");
 	});
 
-	it("uses fallback translations for Vine field names", () => {
+	it("uses fallback translations for validation field names", () => {
 		const manager = new Rosetta({
 			defaultLocale: "en",
 			messages: {
@@ -679,7 +679,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		).toBe("Saisir email address");
 	});
 
-	it("matches Vine wildcard priority and translates cross-field metadata", () => {
+	it("matches wildcard priority and translates cross-field metadata", () => {
 		const manager = new Rosetta({
 			messages: {
 				en: {
@@ -718,7 +718,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		});
 	});
 
-	it("interpolates Vine's default message when no translation exists", () => {
+	it("interpolates the default message when no translation exists", () => {
 		const provider = new Rosetta().locale("en").createMessagesProvider();
 		expect(
 			provider.getMessage(

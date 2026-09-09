@@ -359,7 +359,7 @@ export interface ValidationFieldContext {
 	wildCardPath: string;
 }
 
-/** VineJS-compatible messages provider without a runtime Vine dependency. */
+/** A messages provider for rune, without a runtime dependency on it. */
 export class I18nMessagesProvider {
 	readonly #messagesPrefix: string;
 	readonly #fieldsPrefix: string;
@@ -371,7 +371,7 @@ export class I18nMessagesProvider {
 		this.#fieldsPrefix = `${prefix}.fields`;
 	}
 
-	/** Adonis/Vine contract. */
+	/** The messages-provider contract. */
 	getMessage(
 		defaultMessage: string,
 		rule: string,
@@ -399,7 +399,7 @@ export class I18nMessagesProvider {
 			: defaultMessageOrField;
 		const fieldName = this.translateField(context.name);
 
-		// Vine reuses this metadata in its serialized error, so matching Adonis
+		// The metadata is reused in the serialized error, so matching Adonis
 		// requires translating these entries in place as well as in the message.
 		if (meta.otherField !== undefined) {
 			meta.otherField = this.translateField(meta.otherField as string | number);
