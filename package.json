@@ -1,7 +1,7 @@
 {
   "name": "@c9up/rosetta",
   "version": "0.3.3",
-  "description": "Rosetta \u2014 dedicated i18n module for the Ream ecosystem",
+  "description": "Rosetta — dedicated i18n module for the Ream ecosystem",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -70,12 +70,12 @@
     "test:types": "tsc --noEmit -p tsconfig.types.json"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.10",
-    "@types/node": "^22.19.15",
-    "@vitest/coverage-v8": "^4.1.2",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2",
-    "@c9up/ream": "^0.2.0"
+    "@biomejs/biome": "^2.5.12",
+    "@c9up/ream": "^0.2.0",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -136,6 +136,8 @@
     "@c9up/ream": "^0.2.0"
   },
   "peerDependenciesMeta": {
-    "@c9up/ream": { "optional": true }
+    "@c9up/ream": {
+      "optional": true
+    }
   }
 }
