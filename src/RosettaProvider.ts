@@ -24,6 +24,12 @@ interface RosettaConfigStore {
 export interface RosettaAppContext {
 	container: RosettaContainer;
 	config: RosettaConfigStore;
+	/**
+	 * Whether a template engine is installed. Set by `InkerProvider`'s
+	 * constructor, so it is already true when this provider boots. Optional: a
+	 * host without one simply never publishes the i18n globals.
+	 */
+	usingInker?: boolean;
 }
 
 export interface RosettaProviderConfig extends RosettaOptions {
@@ -66,14 +72,6 @@ interface PluggableEngine {
 	use(plugin: (engine: TemplateEngineLike) => void): void;
 }
 
-/**
- * The `inker` container binding. It may be the engine itself, or — as the
- * provider actually registers it — a renderer exposing the engine it wraps.
- */
-interface InkerBinding {
-	_templates?: unknown;
-}
-
 function isPluggable(value: unknown): value is PluggableEngine {
 	return (
 		typeof value === "object" &&
@@ -88,21 +86,6 @@ function publishesGlobals(value: unknown): value is TemplateEngineLike {
 		value !== null &&
 		typeof Reflect.get(value, "global") === "function"
 	);
-}
-
-/**
- * Where to install the i18n plugin: the `inker` binding when it takes plugins
- * or publishes globals, otherwise the engine it wraps. `undefined` when neither
- * does, which simply means no template engine is installed.
- */
-function inkerTargetOf(
-	binding: InkerBinding | undefined,
-): PluggableEngine | TemplateEngineLike | undefined {
-	for (const candidate of [binding, binding?._templates]) {
-		if (isPluggable(candidate)) return candidate;
-		if (publishesGlobals(candidate)) return candidate;
-	}
-	return undefined;
 }
 
 export default class RosettaProvider {
@@ -191,17 +174,7 @@ export default class RosettaProvider {
 				this.#previousMessagesProvider = validator.messagesProvider;
 				DetectUserLocaleMiddleware.registerMessagesProvider(validator);
 			}
-			// The container binds `inker` to a renderer that WRAPS the engine, so
-			// reach the engine through it when the binding itself publishes no
-			// globals. This used to resolve a token no provider ever registers,
-			// so the i18n globals never reached a template at all.
-			const binding = await this.#resolveOptional<InkerBinding>("inker");
-			const target = inkerTargetOf(binding);
-			if (target) {
-				const plugin = inkerPluginI18n(rosetta);
-				if (isPluggable(target)) target.use(plugin);
-				else plugin(target);
-			}
+			await this.#installTemplatePlugin(rosetta);
 			const repl = await this.#resolveOptional<I18nReplLike>("repl");
 			if (repl) registerReplBindings(repl, rosetta);
 			setI18n(rosetta);
@@ -230,6 +203,36 @@ export default class RosettaProvider {
 		}
 		this.#validator = undefined;
 		this.#previousMessagesProvider = undefined;
+	}
+
+	/**
+	 * Publish the i18n globals into the template engine.
+	 *
+	 * Through the engine package's MODULE SINGLETON, guarded by the host's
+	 * `usingInker` flag — never through the container. Upstream's i18n provider
+	 * does exactly this, and the reason shows up as a lifecycle knot the moment
+	 * you do it the other way: the engine's container token is bound in
+	 * `register()` and only resolvable after `start()`, which every provider's
+	 * `boot()` precedes. Resolving it from here either threw or forced the
+	 * engine to be built before its own peers were wired, and boot order became
+	 * the contract. The singleton has no lifecycle to get wrong — its `use()`
+	 * enqueues, and the plugin runs just before the first render.
+	 *
+	 * inker is an OPTIONAL peer, so the import has to be dynamic and the flag
+	 * has to be checked first: an app without a template engine never reaches
+	 * the import. What comes back is narrowed by a guard rather than trusted,
+	 * the way this provider treats every other peer — it knows them by shape.
+	 */
+	async #installTemplatePlugin(rosetta: Rosetta): Promise<void> {
+		if (this.app.usingInker !== true) return;
+		const module: unknown = await import("@c9up/inker");
+		const engine =
+			typeof module === "object" && module !== null
+				? Reflect.get(module, "default")
+				: undefined;
+		const plugin = inkerPluginI18n(rosetta);
+		if (isPluggable(engine)) engine.use(plugin);
+		else if (publishesGlobals(engine)) plugin(engine);
 	}
 
 	async #resolveOptional<T>(token: unknown): Promise<T | undefined> {

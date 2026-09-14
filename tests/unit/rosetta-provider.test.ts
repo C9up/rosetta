@@ -1,13 +1,32 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Rosetta } from "../../src/Rosetta.js";
 import RosettaProvider, {
 	type RosettaAppContext,
 	type RosettaProviderConfig,
 } from "../../src/RosettaProvider.js";
 import { clearI18n, getI18n } from "../../src/services/main.js";
+
+/**
+ * The engine's module singleton, stubbed.
+ *
+ * Mocked rather than imported for real because what is under test is the
+ * CONTRACT — the provider pushes a plugin into the package's default export —
+ * not what inker does with it afterwards. Importing the real one would also
+ * pull a native binding into a unit test that has no use for it.
+ */
+const enginePlugins: Array<
+	(engine: { global(n: string, v: unknown): void }) => void
+> = [];
+vi.mock("@c9up/inker", () => ({
+	default: {
+		use(plugin: (engine: { global(n: string, v: unknown): void }) => void) {
+			enginePlugins.push(plugin);
+		},
+	},
+}));
 
 function buildApp(
 	i18nConfig?: RosettaProviderConfig,
@@ -44,6 +63,9 @@ function buildApp(
 }
 
 describe("rosetta > RosettaProvider", () => {
+	beforeEach(() => {
+		enginePlugins.length = 0;
+	});
 	afterEach(() => clearI18n());
 
 	it("register binds the class and all Ream/Adonis aliases", async () => {
@@ -117,13 +139,13 @@ describe("rosetta > RosettaProvider", () => {
 
 	it("does not hide failures from registered optional services", async () => {
 		const app = buildApp({ defaultLocale: "en" });
-		app.container.singleton("inker", () => {
-			throw new Error("inker initialization failed");
+		app.container.singleton("emitter", () => {
+			throw new Error("emitter initialization failed");
 		});
 		const provider = new RosettaProvider(app);
 		provider.register();
 		await expect(provider.boot()).rejects.toThrow(
-			"inker initialization failed",
+			"emitter initialization failed",
 		);
 	});
 
@@ -138,9 +160,9 @@ describe("rosetta > RosettaProvider", () => {
 			{
 				emitter: { emit: () => eventCount++ },
 				requestValidator: validator,
-				inker: {
-					use() {
-						throw new Error("inker plugin failed");
+				repl: {
+					addMethod() {
+						throw new Error("repl binding failed");
 					},
 				},
 			},
@@ -148,7 +170,7 @@ describe("rosetta > RosettaProvider", () => {
 		const provider = new RosettaProvider(app);
 		provider.register();
 
-		await expect(provider.boot()).rejects.toThrow("inker plugin failed");
+		await expect(provider.boot()).rejects.toThrow("repl binding failed");
 		expect(validator.messagesProvider).toBe(previousProvider);
 		expect(getI18n()).toBeUndefined();
 
@@ -170,13 +192,9 @@ describe("rosetta > RosettaProvider", () => {
 					},
 				},
 				requestValidator: validator,
-				inker: {
-					global(name: string, value: unknown) {
-						globals.set(name, value);
-					},
-				},
 			},
 		);
+		app.usingInker = true;
 		const provider = new RosettaProvider(app);
 		provider.register();
 		await provider.boot();
@@ -185,32 +203,37 @@ describe("rosetta > RosettaProvider", () => {
 		manager.locale().t("missing");
 		expect(events[0]?.name).toBe("i18n:missing:translation");
 		expect(validator.messagesProvider).toBeTypeOf("function");
+		// The plugin went to the engine's module singleton, and publishes the
+		// globals when the engine runs it.
+		expect(enginePlugins).toHaveLength(1);
+		const engine = { global: (n: string, v: unknown) => globals.set(n, v) };
+		enginePlugins[0]?.(engine);
 		expect(globals.get("t")).toBeTypeOf("function");
 	});
 
-	it("reaches the engine through the renderer the provider registers", async () => {
-		// `inker` is bound to an InkerRenderer, which publishes no globals of its
-		// own — the engine it wraps does. Resolving a token nothing registers
-		// meant the i18n globals never reached a template.
-		const globals = new Map<string, unknown>();
-		const app = buildApp(
-			{ defaultLocale: "en", messages: { en: {} } },
-			{
-				inker: {
-					render() {},
-					_templates: {
-						global(name: string, value: unknown) {
-							globals.set(name, value);
-						},
-					},
-				},
-			},
-		);
+	it("pushes the plugin through the engine module, never the container", async () => {
+		// The engine's container token is bound in register() and only
+		// resolvable after start(), which every provider's boot() precedes.
+		// Resolving it from here made boot order the contract; the module
+		// singleton has no lifecycle to get wrong. A binding under that token
+		// must therefore be left alone — this one throws if anything touches it.
+		const app = buildApp({ defaultLocale: "en", messages: { en: {} } });
+		app.container.singleton("inker", () => {
+			throw new Error("the container was consulted for the engine");
+		});
+		app.usingInker = true;
 		const provider = new RosettaProvider(app);
 		provider.register();
 		await provider.boot();
-		expect(globals.get("t")).toBeTypeOf("function");
-		expect(globals.get("i18n")).toBeDefined();
+		expect(enginePlugins).toHaveLength(1);
+	});
+
+	it("publishes nothing when no template engine is installed", async () => {
+		const app = buildApp({ defaultLocale: "en", messages: { en: {} } });
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await provider.boot();
+		expect(enginePlugins).toHaveLength(0);
 	});
 
 	it("registers the i18n REPL binding and load method", async () => {
