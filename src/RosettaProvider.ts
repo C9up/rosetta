@@ -225,7 +225,17 @@ export default class RosettaProvider {
 	 */
 	async #installTemplatePlugin(rosetta: Rosetta): Promise<void> {
 		if (this.app.usingInker !== true) return;
-		const module: unknown = await import("@c9up/inker");
+
+		// The specifier is built rather than written inline, the same way ream's
+		// quasar bridge does it, and for the same reason: this package declares
+		// ZERO runtime dependencies and `scripts/verify-package.mjs` proves it by
+		// refusing to publish when an optional peer appears in the emitted
+		// JavaScript. A literal `import("@c9up/inker")` is exactly that, and it
+		// also makes a bundler try to resolve inker at build time for an
+		// application that never installed it. Computed, it stays invisible to
+		// static analysis and runs only behind the flag above.
+		const specifier = "@c9up/inker";
+		const module: unknown = await import(/* @vite-ignore */ specifier);
 		const engine =
 			typeof module === "object" && module !== null
 				? Reflect.get(module, "default")
