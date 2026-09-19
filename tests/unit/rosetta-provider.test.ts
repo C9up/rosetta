@@ -20,11 +20,26 @@ import { clearI18n, getI18n } from "../../src/services/main.js";
 const enginePlugins: Array<
 	(engine: { global(n: string, v: unknown): void }) => void
 > = [];
+
+/**
+ * What the engine module's default export IS, per test.
+ *
+ * The provider duck-types it: an engine with `use()` gets the plugin enqueued,
+ * one that only publishes globals gets the plugin applied directly. Both shapes
+ * are real — a plugin registrar and a live engine — so a fixed mock could only
+ * ever exercise one of them. Read through a getter so a test can swap it after
+ * the module is mocked.
+ */
+const PLUGGABLE_ENGINE = {
+	use(plugin: (engine: { global(n: string, v: unknown): void }) => void) {
+		enginePlugins.push(plugin);
+	},
+};
+let engineModuleDefault: unknown = PLUGGABLE_ENGINE;
+
 vi.mock("@c9up/inker", () => ({
-	default: {
-		use(plugin: (engine: { global(n: string, v: unknown): void }) => void) {
-			enginePlugins.push(plugin);
-		},
+	get default() {
+		return engineModuleDefault;
 	},
 }));
 
@@ -65,6 +80,7 @@ function buildApp(
 describe("rosetta > RosettaProvider", () => {
 	beforeEach(() => {
 		enginePlugins.length = 0;
+		engineModuleDefault = PLUGGABLE_ENGINE;
 	});
 	afterEach(() => clearI18n());
 
@@ -291,5 +307,80 @@ describe("rosetta > RosettaProvider", () => {
 			const rendered = instance.locale("en").t("greeting", { name: "Alice" });
 			expect(rendered).toBe("Hello Alice");
 		});
+	});
+
+	it("applies the plugin directly to an engine that only publishes globals", async () => {
+		// The other real shape: not a registrar with `use()`, but a live engine.
+		// Handing it the plugin to enqueue would silently do nothing, so the
+		// provider runs the plugin against it instead.
+		const globals = new Map<string, unknown>();
+		engineModuleDefault = {
+			global: (name: string, value: unknown) => globals.set(name, value),
+		};
+		const app = buildApp({
+			defaultLocale: "en",
+			messages: { en: { hi: "Hi" } },
+		});
+		app.usingInker = true;
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await provider.boot();
+
+		expect(enginePlugins).toHaveLength(0);
+		expect(globals.get("t")).toBeTypeOf("function");
+	});
+
+	it("leaves an engine it does not recognise alone rather than throwing", async () => {
+		// A future engine, or a half-loaded module. Publishing i18n globals is
+		// not worth failing the whole application boot over.
+		engineModuleDefault = { somethingElse: true };
+		const app = buildApp({ defaultLocale: "en", messages: { en: {} } });
+		app.usingInker = true;
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await expect(provider.boot()).resolves.toBeUndefined();
+		expect(enginePlugins).toHaveLength(0);
+	});
+
+	it("does not reach for the engine module when no engine is installed", async () => {
+		// `usingInker` unset: the import must not even be attempted.
+		engineModuleDefault = undefined;
+		const app = buildApp({ defaultLocale: "en", messages: { en: {} } });
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await expect(provider.boot()).resolves.toBeUndefined();
+		expect(enginePlugins).toHaveLength(0);
+	});
+
+	it("swallows a rejection from an emitter that answers a promise", async () => {
+		// The emitter contract allows a thenable. An unhandled rejection from a
+		// missing-translation notice would take the process down over a
+		// bookkeeping event, so the result is awaited and its failure dropped.
+		const app = buildApp(
+			{ defaultLocale: "en", messages: { en: {} } },
+			{
+				emitter: { emit: () => Promise.reject(new Error("listener blew up")) },
+			},
+		);
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await provider.boot();
+
+		// Watch for the thing this is supposed to prevent, rather than asserting
+		// that nothing happened.
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const manager = await app.container.resolve<Rosetta>(Rosetta);
+			manager.locale().t("missing");
+			// Two turns: one for the rejection, one for Node to decide nobody
+			// handled it.
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+		expect(unhandled).toEqual([]);
 	});
 });
