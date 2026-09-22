@@ -120,6 +120,15 @@ describe("RosettaLocale extends Formatter", () => {
 		expect(i18n.locale).toBe("fr-ch");
 		expect(i18n.getLocale()).toBe("fr-ch");
 		expect(i18n.fallbackLocale).toBe("fr");
-		expect(i18n.formatNumber(1234.56)).toBe("1 234,56");
+		// Against Intl itself, not a pinned string: fr-CH's group separator has
+		// moved between CLDR releases (apostrophe vs U+202F), and the claim here is
+		// that the FORMATTING locale followed the switch — not which character
+		// this month's ICU picks for it.
+		expect(i18n.formatNumber(1234.56)).toBe(
+			new Intl.NumberFormat("fr-CH").format(1234.56),
+		);
+		expect(i18n.formatNumber(1234.56)).not.toBe(
+			new Intl.NumberFormat("en").format(1234.56),
+		);
 	});
 });
