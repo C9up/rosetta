@@ -52,7 +52,7 @@ import {
 } from "./formatters/IcuFormatter.js";
 import type { I18nManagerConfig, LoaderFactory } from "./Rosetta.js";
 
-export { configure, stubsRoot } from "./configure.js";
+export { configure } from "./configure.js";
 export type { I18nHttpContext, RequestValidatorLike } from "./middleware.js";
 export type {
 	BaseI18nConfig,
@@ -81,6 +81,7 @@ export type {
 } from "./Rosetta.js";
 export type { I18nReplContext, I18nReplLike } from "./repl.js";
 export { registerReplBindings } from "./repl.js";
+export { stubsRoot } from "./stubs.js";
 
 export interface I18nEvents {
 	"i18n:missing:translation": import("./Rosetta.js").MissingTranslationEventPayload;

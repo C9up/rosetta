@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nManagerFactory } from "../../src/factories/main.js";
 import {
@@ -25,6 +27,27 @@ import DetectUserLocaleMiddleware from "../../src/middleware.js";
 function defined<T>(value: T | null | undefined): T {
 	if (value == null) throw new Error("expected a defined value");
 	return value;
+}
+
+/**
+ * Read a stub the way `codemods.makeUsingStub` does.
+ *
+ * The real file, not a fixture: a test that stubbed this out would pass with
+ * a stub that does not exist.
+ */
+function renderStub(
+	stubsRoot: string,
+	stubPath: string,
+	state: Record<string, string | number | boolean>,
+): { to: string; body: string } {
+	const raw = readFileSync(resolve(stubsRoot, stubPath), "utf8");
+	const [, front = "", body = ""] = raw.split(/^---\r?\n/m, 3);
+	const declared = /^to:\s*(.+)$/m.exec(front)?.[1]?.trim() ?? "";
+	const render = (text: string): string =>
+		text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key: string) =>
+			state[key] === undefined ? match : String(state[key]),
+		);
+	return { to: render(declared), body: render(body) };
 }
 
 describe("rosetta > AdonisJS i18n compatibility", () => {
@@ -848,6 +871,11 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 			async writeFile(filePath, content) {
 				files.set(filePath, content);
 			},
+			async makeUsingStub(stubsRoot, stubPath, state = {}) {
+				const { to, body } = renderStub(stubsRoot, stubPath, state);
+				files.set(to, body);
+				return { path: to, contents: body };
+			},
 			async registerMiddleware(importPath, options) {
 				expect(options).toEqual({ tier: "router" });
 				middleware.push(importPath);
@@ -860,7 +888,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 			files.get("app/middleware/detect_user_locale_middleware.ts"),
 		).toContain("declare module '@c9up/ream'");
 		await expect(
-			fsp.access(path.join(fileURLToPath(stubsRoot), "config/i18n.stub")),
+			fsp.access(path.join(stubsRoot, "config/i18n.stub")),
 		).resolves.toBeUndefined();
 	});
 });

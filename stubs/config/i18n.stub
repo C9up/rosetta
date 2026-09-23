@@ -1,3 +1,6 @@
+---
+to: config/i18n.ts
+---
 import { defineConfig, formatters, loaders } from '@c9up/rosetta'
 
 export default defineConfig({

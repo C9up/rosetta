@@ -1,6 +1,6 @@
 {
   "name": "@c9up/rosetta",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Rosetta — dedicated i18n module for the Ream ecosystem",
   "license": "MIT",
   "type": "module",
@@ -72,7 +72,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
     "@c9up/inker": "^0.1.20",
-    "@c9up/ream": "^0.2.0",
+    "@c9up/ream": "^0.2.26",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.11",
     "typescript": "^6.0.3",
@@ -136,7 +136,7 @@
   },
   "peerDependencies": {
     "@c9up/inker": "^0.1.20",
-    "@c9up/ream": "^0.2.0"
+    "@c9up/ream": "^0.2.26"
   },
   "peerDependenciesMeta": {
     "@c9up/inker": {

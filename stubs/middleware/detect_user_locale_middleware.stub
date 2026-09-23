@@ -1,3 +1,6 @@
+---
+to: app/middleware/detect_user_locale_middleware.ts
+---
 import DetectUserLocaleMiddleware from '@c9up/rosetta/middleware'
 import type { RosettaLocale } from '@c9up/rosetta'
 
