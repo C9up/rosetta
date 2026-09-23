@@ -1,5 +1,3 @@
-import { stubsRoot } from "./stubs.js";
-
 interface Codemods {
 	addProvider(importPath: string): Promise<void>;
 	addMetaFile?(pattern: string, reloadServer?: boolean): Promise<void>;
@@ -40,6 +38,10 @@ export async function configure(codemods: Codemods): Promise<void> {
 	 * configuring against one then skips this rather than failing the install.
 	 */
 	await codemods.addMetaFile?.("resources/lang/**/*.{json,yaml,yml}", false);
+	// Loaded here, not at module scope: this package ships a browser barrel,
+	// and `stubsRoot` reads `node:path`. A hook that only ever runs on a
+	// developer's machine must not drag a Node builtin into the browser graph.
+	const { stubsRoot } = await import("./stubs.js");
 	await codemods.makeUsingStub(stubsRoot, "config/i18n.stub");
 	await codemods.makeUsingStub(
 		stubsRoot,

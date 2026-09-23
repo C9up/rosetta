@@ -78,7 +78,6 @@ export type {
 export type { RosettaProviderConfig } from "./RosettaProvider.js";
 export type { I18nReplContext, I18nReplLike } from "./repl.js";
 export { registerReplBindings } from "./repl.js";
-export { stubsRoot } from "./stubs.js";
 
 export interface I18nEvents {
 	"i18n:missing:translation": import("./Rosetta.js").MissingTranslationEventPayload;
