@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { Rosetta } from "../../src/Rosetta.js";
 import i18n, { getI18n, setI18n } from "../../src/services/main.js";
@@ -9,6 +10,21 @@ describe("rosetta > services/main singleton", () => {
 		// setI18n tests follow.
 		expect(getI18n()).toBeUndefined();
 		expect(() => i18n.locale("en")).toThrow(/accessed before/);
+	});
+
+	it("answers then and symbols pre-boot, so a loader can inspect it", async () => {
+		expect(getI18n()).toBeUndefined();
+		// Resolving a promise with it reads `then`; it must not look thenable.
+		await expect(Promise.resolve(i18n)).resolves.toBe(i18n);
+		// Logging it inspects symbols (and the target), never a member.
+		expect(() => inspect(i18n)).not.toThrow();
+		expect(Reflect.get(i18n, Symbol.toPrimitive)).toBeUndefined();
+		expect(Reflect.get(i18n, Symbol.iterator)).toBeUndefined();
+		// Converting it to a string reads `toString`, a real member: that use
+		// reports like any other.
+		expect(() => String(i18n)).toThrow(/accessed before/);
+		// A real member read too early still reports.
+		expect(() => i18n.defaultLocale).toThrow(/accessed before/);
 	});
 
 	it("getI18n returns undefined pre-boot", () => {

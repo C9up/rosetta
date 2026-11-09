@@ -31,8 +31,18 @@ export function clearI18n(value?: Rosetta): void {
 	if (value === undefined || instance === value) instance = undefined;
 }
 
-const i18n: Rosetta = new Proxy({} as Rosetta, {
+// The target is never read through — every trap forwards to `instance`.
+const target: Rosetta = Object.create(null);
+
+const i18n: Rosetta = new Proxy(target, {
 	get(_target, prop) {
+		// A module loader inspects what it imports before anyone uses it: it
+		// reads `then` to decide whether the value is thenable, and various
+		// symbols for interop and formatting. They are not members of Rosetta, so
+		// answer undefined and let a genuine access be the one that reports.
+		if (typeof prop === "symbol" || prop === "then") {
+			return undefined;
+		}
 		if (!instance) {
 			throw new Error(
 				"[rosetta] Rosetta singleton accessed before RosettaProvider.boot() ran " +
