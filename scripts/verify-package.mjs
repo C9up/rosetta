@@ -63,4 +63,16 @@ if (peers.length > 0) {
   }
 }
 
+// Every subpath the README tells people to import has to exist: an entry point
+// missing from `exports` fails with ERR_PACKAGE_PATH_NOT_EXPORTED.
+const readme = readFileSync(new URL('README.md', root), 'utf8')
+const exported = new Set(Object.keys(packageJson.exports ?? {}))
+const published = new Set(Object.keys(packageJson.publishConfig?.exports ?? {}))
+for (const match of readme.matchAll(/@c9up\/rosetta(\/[\w./-]*[\w-])?/g)) {
+  const subpath = match[1] === undefined ? '.' : `.${match[1]}`
+  if (!exported.has(subpath) || !published.has(subpath)) {
+    throw new Error(`${TAG} README.md names ${match[0]}, which package.json does not export`)
+  }
+}
+
 console.log(`${TAG} publish shape verified (zero runtime dependencies)`)

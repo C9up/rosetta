@@ -106,13 +106,14 @@ formatter.formatNumber(1234.56)                        // '1 234,56'
 `request.languages()` or `Accept-Language`, assigns a request-scoped `ctx.i18n`
 instance and shares it with the view layer. Its static
 `registerMessagesProvider` method connects a compatible request validator to
-`i18n.createMessagesProvider()`.
+`i18n.createMessagesProvider()`; the provider does this at boot, and a request
+the middleware did not run for keeps the validator's own messages.
 
-For Ream templates, `@c9up/inker` is the Edge-equivalent integration. Its
-provider resolves Rosetta through the `rosetta` container alias and exposes the
-canonical `t()` helper; the middleware writes the negotiated language to
-`ctx.locale`, which Inker reads per render. The Edge adapter remains exported
-from `@c9up/rosetta/plugins/edge` for Edge-compatible non-Ream hosts.
+For Ream templates, `@c9up/inker` is the Edge-equivalent integration. When
+Inker is installed, the provider registers the template plugin from
+`@c9up/rosetta/plugins/inker`: the `i18n`, `t`, `getDefaultLocale` and
+`getSupportedLocales` globals. `t()` and `i18n` answer in the request's locale
+on every render path, whether through `ctx.view` or `inker.render(ctx, …)`.
 
 ## Typed Translation Keys
 
@@ -222,13 +223,14 @@ never had a binary to load, are unaffected.
 ## Entry Points
 
 - `@c9up/rosetta`
-- `@c9up/rosetta/i18n_provider`
+- `@c9up/rosetta/provider` (alias: `@c9up/rosetta/i18n_provider`)
 - `@c9up/rosetta/factories`
 - `@c9up/rosetta/middleware`
-- `@c9up/rosetta/plugins/edge`
+- `@c9up/rosetta/configure`
+- `@c9up/rosetta/plugins/inker`
 - `@c9up/rosetta/repl`
-- `@c9up/rosetta/services/main`
 - `@c9up/rosetta/types`
+- `@c9up/rosetta/services/main`
 
 ## License
 
