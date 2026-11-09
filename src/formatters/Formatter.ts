@@ -73,9 +73,36 @@ export function normalizeLocale(locale: string): string {
 	return locale.trim().replace(/_/g, "-").toLowerCase();
 }
 
+const DATE_ONLY_ISO = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;
+
+/**
+ * Parse an ISO string the way Luxon's `DateTime.fromISO` reads it.
+ *
+ * ECMA-262 reads the date-only forms (`2024`, `2024-01`, `2024-01-01`) as UTC
+ * midnight, so a server west of UTC formats them as the previous day. They name
+ * a calendar day, and Luxon reads them in the local zone; every other form
+ * already agrees (an offset is honoured, a bare date-time is local). An
+ * impossible day gives an invalid date, as Luxon does, instead of rolling over.
+ */
+export function parseIsoDateTime(value: string): Date {
+	const match = DATE_ONLY_ISO.exec(value);
+	if (!match) return new Date(value);
+	const year = Number(match[1]);
+	const month = match[2] === undefined ? 1 : Number(match[2]);
+	const day = match[3] === undefined ? 1 : Number(match[3]);
+	// setFullYear, not the constructor: `new Date(99, …)` means 1999.
+	const date = new Date(0);
+	date.setFullYear(year, month - 1, day);
+	date.setHours(0, 0, 0, 0);
+	if (date.getMonth() !== month - 1 || date.getDate() !== day) {
+		return new Date(Number.NaN);
+	}
+	return date;
+}
+
 function normalizeDateTimeValue(value: DateTimeValue): Date | number {
 	if (value instanceof Date || typeof value === "number") return value;
-	if (typeof value === "string") return new Date(value);
+	if (typeof value === "string") return parseIsoDateTime(value);
 	if ("toJSDate" in value) return value.toJSDate();
 	return value.toMillis();
 }

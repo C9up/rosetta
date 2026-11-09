@@ -1,4 +1,5 @@
 import type { RosettaOptions } from "../Rosetta.js";
+import { parseIsoDateTime } from "./Formatter.js";
 import {
 	getDateTimeFormatter,
 	getNumberFormatter,
@@ -1225,7 +1226,7 @@ function dateTextWidth(
 function normalizeDate(value: unknown): Date | number {
 	if (value instanceof Date || typeof value === "number") return value;
 	if (typeof value === "string") {
-		const date = new Date(value);
+		const date = parseIsoDateTime(value);
 		if (Number.isNaN(date.getTime()))
 			throw new RangeError(`Invalid ISO date '${value}'`);
 		return date;
