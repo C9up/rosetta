@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { IcuFormatter } from "../../src/formatters/IcuFormatter.js";
 import { Rosetta, type RosettaLoader } from "../../src/Rosetta.js";
 
 describe("rosetta > Rosetta > locale getters/setters", () => {
@@ -221,5 +222,54 @@ describe("rosetta > Rosetta > loaders + boot", () => {
 		};
 		const r = new Rosetta({ loaders: [nullLoader, undefinedLoader] });
 		await expect(r.loadLocale("ja")).resolves.toBeInstanceOf(Rosetta);
+	});
+});
+
+/**
+ * What intl-messageformat renders for the same message (with `ignoreTag`, as
+ * the upstream formatter builds it). `#` is special only directly inside a
+ * plural or selectordinal, an apostrophe quotes only before a character that is
+ * special where it stands, and a `}` that closes nothing is text.
+ */
+describe("rosetta > IcuFormatter > upstream syntax parity", () => {
+	const icu = new IcuFormatter();
+	const cases: Array<[string, Record<string, unknown>, string]> = [
+		[
+			"{n, plural, other {{g, select, a {# items} other {x}}}}",
+			{ n: 3, g: "a" },
+			"# items",
+		],
+		["It''s '{literal}' and '#'", {}, "It's {literal} and '#'"],
+		["a } b", {}, "a } b"],
+		["a }} b {x} c }", { x: 1 }, "a }} b 1 c }"],
+		["{x}}", { x: 1 }, "1}"],
+		["'<b>' and '>' and '<'", {}, "<b> and > and <"],
+		["{n, plural, other {'#' is # and '<b>'}}", { n: 2 }, "# is 2 and <b>"],
+		["'#{x}'", { x: 1 }, "'#1'"],
+		["{n, plural, other {'#{x}'}}", { n: 1, x: 2 }, "#{x}"],
+		["{g, select, a {# sel} other {o}}", { g: "a" }, "# sel"],
+		["{n, plural, other {{n, plural, other {# in}} #}}", { n: 2 }, "2 in 2"],
+		[
+			"{n, plural, other {{g, select, a {{m, plural, other {# m}}} other {x}} #}}",
+			{ n: 2, g: "a", m: 5 },
+			"5 m 2",
+		],
+		["{n, selectordinal, other {#th}}", { n: 2 }, "2th"],
+		["# top", {}, "# top"],
+		["x '' y", {}, "x ' y"],
+		["'}' and '{'", {}, "} and {"],
+	];
+
+	for (const [message, data, expected] of cases) {
+		it(`renders ${JSON.stringify(message)}`, () => {
+			expect(icu.format(message, "en", data)).toBe(expected);
+		});
+	}
+
+	it("still rejects a body that never closes", () => {
+		expect(() =>
+			icu.format("{n, plural, other {a } b}}", "en", { n: 1 }),
+		).toThrow(SyntaxError);
+		expect(() => icu.format("{x", "en", { x: 1 })).toThrow(SyntaxError);
 	});
 });

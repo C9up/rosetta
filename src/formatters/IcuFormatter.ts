@@ -329,7 +329,7 @@ function assertNever(value: never): never {
 
 /** Dependency-free ICU parser. Emits the AST consumed by {@link MessageEvaluator}. */
 function parseMessageToAst(message: string): MessageNode[] {
-	return parseSegmentToAst(message, 0, { nodes: 0 });
+	return parseSegmentToAst(message, 0, { nodes: 0 }, false);
 }
 
 interface AstParseState {
@@ -360,10 +360,16 @@ function flushAstText(
 	return "";
 }
 
+/**
+ * @param plural Whether this text is the direct body of a plural or
+ *   selectordinal option: only there is `#` the number, and an apostrophe
+ *   before it a quote (formatjs's `parentArgType`).
+ */
 function parseSegmentToAst(
 	source: string,
 	depth: number,
 	state: AstParseState,
+	plural: boolean,
 ): MessageNode[] {
 	if (depth > MAX_NESTING_DEPTH) {
 		throw new RangeError(
@@ -376,14 +382,14 @@ function parseSegmentToAst(
 	while (index < source.length) {
 		const char = source[index];
 		if (char === "'") {
-			const quoted = consumeQuote(source, index);
+			const quoted = consumeQuote(source, index, plural);
 			text += quoted.value;
 			index = quoted.next;
 			continue;
 		}
 		if (char === "{") {
 			text = flushAstText(nodes, text, state);
-			const end = findMatchingBrace(source, index);
+			const end = findArgumentEnd(source, index, depth + 1);
 			if (end < 0) throw new SyntaxError("Unclosed ICU argument");
 			pushAstNode(
 				nodes,
@@ -393,8 +399,9 @@ function parseSegmentToAst(
 			index = end + 1;
 			continue;
 		}
-		if (char === "}") throw new SyntaxError("Unexpected ICU closing brace");
-		if (char === "#") {
+		// A body is cut at its closing brace, so a `}` reaching here closes
+		// nothing: it is text, as upstream reads it at the top level.
+		if (char === "#" && plural) {
 			text = flushAstText(nodes, text, state);
 			pushAstNode(nodes, { type: "pound" }, state);
 			index++;
@@ -412,7 +419,7 @@ function parseArgumentToAst(
 	depth: number,
 	state: AstParseState,
 ): MessageNode {
-	const parts = splitTopLevel(content, ",");
+	const parts = splitArgument(content, depth);
 	const name = parts[0]?.trim();
 	if (!name) throw new SyntaxError("Empty ICU argument");
 	if (parts.length === 1) return { type: "argument", name };
@@ -423,15 +430,15 @@ function parseArgumentToAst(
 		case "select": {
 			// `offset:` is plural-only — for select it must parse as a plain option
 			// key (and therefore fail), exactly as the Rust grammar does.
-			const { options } = parseOptions(style, false);
-			const parsed = parseOptionNodes(options, depth, state);
+			const { options } = parseOptions(style, false, depth);
+			const parsed = parseOptionNodes(options, depth, state, false);
 			requireOtherOption(parsed, "select");
 			return { type: "select", name, options: parsed };
 		}
 		case "plural":
 		case "selectordinal": {
-			const { options, offset } = parseOptions(style, true);
-			const parsed = parseOptionNodes(options, depth, state);
+			const { options, offset } = parseOptions(style, true, depth);
+			const parsed = parseOptionNodes(options, depth, state, true);
 			requireOtherOption(parsed, kind);
 			return {
 				type: "plural",
@@ -457,10 +464,11 @@ function parseOptionNodes(
 	options: Map<string, string>,
 	depth: number,
 	state: AstParseState,
+	plural: boolean,
 ): Record<string, MessageNode[]> {
 	const parsed: Record<string, MessageNode[]> = Object.create(null);
 	for (const [key, body] of options) {
-		parsed[key] = parseSegmentToAst(body, depth, state);
+		parsed[key] = parseSegmentToAst(body, depth, state, plural);
 	}
 	return parsed;
 }
@@ -519,11 +527,19 @@ function formatIcuDate(
 function consumeQuote(
 	source: string,
 	start: number,
+	plural: boolean,
 ): { value: string; next: number } {
-	if (source[start + 1] === "'") return { value: "'", next: start + 2 };
-	if (!["{", "}", "#"].includes(source[start + 1] ?? "")) {
-		return { value: "'", next: start + 1 };
-	}
+	const next = source[start + 1];
+	if (next === "'") return { value: "'", next: start + 2 };
+	// Quoting "only where needed": before a brace or an angle bracket, and
+	// before `#` only where `#` means something.
+	const special =
+		next === "{" ||
+		next === "}" ||
+		next === "<" ||
+		next === ">" ||
+		(next === "#" && plural);
+	if (!special) return { value: "'", next: start + 1 };
 	let output = "";
 	for (let index = start + 1; index < source.length; index++) {
 		if (source[index] !== "'") {
@@ -540,47 +556,118 @@ function consumeQuote(
 	return { value: output, next: source.length };
 }
 
-function findMatchingBrace(source: string, start: number): number {
-	let depth = 0;
-	for (let index = start; index < source.length; index++) {
-		if (source[index] === "'") {
-			index = consumeQuote(source, index).next - 1;
+/**
+ * The `}` closing the argument opened at `start`, or -1.
+ *
+ * Where a quote starts depends on whether the text sits in a plural body, so
+ * the scan follows the structure: the argument's header, then its option
+ * bodies, each read with the quoting of its own kind.
+ */
+function findArgumentEnd(source: string, start: number, depth: number): number {
+	// One level past what the parser accepts: anything deeper is rejected there
+	// with the same error, and the recursion stays bounded.
+	if (depth > MAX_NESTING_DEPTH + 1) {
+		throw new RangeError(
+			`ICU message exceeds ${MAX_NESTING_DEPTH} nesting levels`,
+		);
+	}
+	const headerStart = start + 1;
+	let index = headerStart;
+	while (index < source.length) {
+		const char = source[index];
+		if (char === "'") {
+			index = consumeQuote(source, index, false).next;
 			continue;
 		}
-		if (source[index] === "{") depth++;
-		if (source[index] === "}" && --depth === 0) return index;
+		if (char === "}") return index;
+		if (char === "{") break;
+		index++;
+	}
+	const kind = source.slice(headerStart, index).split(",")[1]?.trim();
+	const plural = kind === "plural" || kind === "selectordinal";
+	while (index < source.length) {
+		const char = source[index];
+		if (char === "}") return index;
+		if (char === "{") {
+			const end = findBodyEnd(source, index, plural, depth);
+			if (end < 0) return -1;
+			index = end + 1;
+			continue;
+		}
+		if (char === "'") {
+			index = consumeQuote(source, index, false).next;
+			continue;
+		}
+		index++;
 	}
 	return -1;
 }
 
-function splitTopLevel(source: string, separator: string): string[] {
-	const parts: string[] = [];
-	let depth = 0;
-	let start = 0;
-	for (let index = 0; index < source.length; index++) {
-		if (source[index] === "'") {
-			index = consumeQuote(source, index).next - 1;
+/** The `}` closing the option body opened at `start`, or -1. */
+function findBodyEnd(
+	source: string,
+	start: number,
+	plural: boolean,
+	depth: number,
+): number {
+	let index = start + 1;
+	while (index < source.length) {
+		const char = source[index];
+		if (char === "'") {
+			index = consumeQuote(source, index, plural).next;
 			continue;
 		}
-		if (source[index] === "{") depth++;
-		else if (source[index] === "}") depth--;
-		else if (source[index] === separator && depth === 0) {
-			parts.push(source.slice(start, index).trim());
+		if (char === "}") return index;
+		if (char === "{") {
+			const end = findArgumentEnd(source, index, depth + 1);
+			if (end < 0) return -1;
+			index = end + 1;
+			continue;
+		}
+		index++;
+	}
+	return -1;
+}
+
+/** An argument's content split on its own commas, option bodies skipped. */
+function splitArgument(content: string, depth: number): string[] {
+	const parts: string[] = [];
+	let start = 0;
+	let index = 0;
+	while (index < content.length) {
+		const char = content[index];
+		if (char === "'") {
+			index = consumeQuote(content, index, false).next;
+			continue;
+		}
+		if (char === "{") {
+			const kind = parts[1];
+			const plural = kind === "plural" || kind === "selectordinal";
+			const end = findBodyEnd(content, index, plural, depth);
+			// Unclosed: the option parser reports it.
+			index = end < 0 ? content.length : end + 1;
+			continue;
+		}
+		if (char === ",") {
+			parts.push(content.slice(start, index).trim());
 			start = index + 1;
 		}
+		index++;
 	}
-	parts.push(source.slice(start).trim());
+	parts.push(content.slice(start).trim());
 	return parts;
 }
 
 /**
- * @param allowOffset `offset:` is plural-only. For `select`, Rust's grammar
- *   never looks for it, so `offset:2` there falls through to the option-key
- *   branch and raises the same "invalid option list" error. Keep it false.
+ * @param plural A plural or selectordinal argument. Only those take an
+ *   `offset:` (for `select`, `offset:2` falls through to the option-key branch
+ *   and raises the "invalid option list" error), and only their bodies give
+ *   `#` a meaning.
  */
 function parseOptions(
 	source: string,
-	allowOffset = true,
+	plural: boolean,
+	depth: number,
 ): {
 	options: Map<string, string>;
 	offset: number;
@@ -592,7 +679,7 @@ function parseOptions(
 	let index = 0;
 	while (index < source.length) {
 		while (/\s/.test(source[index] ?? "")) index++;
-		if (allowOffset && source.startsWith("offset:", index)) {
+		if (plural && source.startsWith("offset:", index)) {
 			if (sawOffset) throw new SyntaxError("Duplicate ICU plural offset");
 			if (sawOption) {
 				throw new SyntaxError("ICU plural offset must precede all options");
@@ -622,7 +709,7 @@ function parseOptions(
 				`Invalid ICU option list near '${source.slice(index)}'`,
 			);
 		}
-		const end = findMatchingBrace(source, index);
+		const end = findBodyEnd(source, index, plural, depth);
 		if (end < 0) throw new SyntaxError("Unclosed ICU option body");
 		if (options.has(key)) {
 			throw new SyntaxError(`Duplicate ICU option '${key}'`);
