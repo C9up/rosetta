@@ -64,6 +64,7 @@ export type {
 	LocaleResolverInput,
 	MessageCatalog,
 	MessageTree,
+	MessageTreeList,
 	MissingTranslationEmitter,
 	MissingTranslationEventPayload,
 	MissingTranslationHandler,

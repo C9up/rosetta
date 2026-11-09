@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileSystemLoader } from "../../src/loaders/FileSystemLoader.js";
+import { type MessageTree, Rosetta } from "../../src/Rosetta.js";
 
 describe("rosetta > FileSystemLoader > security", () => {
 	let dir: string;
@@ -140,15 +141,55 @@ describe("rosetta > FileSystemLoader > extension fallback", () => {
 		).resolves.toEqual({ greeting: "Bonjour" });
 	});
 
-	it("rejects JSON arrays instead of flattening numeric indexes", async () => {
+	it("flattens JSON arrays to index keys, like inline messages", async () => {
+		const catalog: MessageTree = {
+			items: ["first", "second"],
+			steps: [{ title: "Sign up" }, { title: "Confirm", hint: ["a", "b"] }],
+		};
+		await fsp.writeFile(path.join(dir, "en.json"), JSON.stringify(catalog));
+		const fromDisk = new Rosetta({
+			defaultLocale: "en",
+			loaders: [new FileSystemLoader({ rootDir: dir })],
+		});
+		await fromDisk.boot();
+		const inline = new Rosetta({
+			defaultLocale: "en",
+			messages: { en: catalog },
+		});
+		for (const rosetta of [fromDisk, inline]) {
+			expect(rosetta.t("items.0")).toBe("first");
+			expect(rosetta.t("items.1")).toBe("second");
+			expect(rosetta.t("steps.0.title")).toBe("Sign up");
+			expect(rosetta.t("steps.1.hint.1")).toBe("b");
+		}
+		expect(fromDisk.getTranslationsFor("en")).toEqual(
+			inline.getTranslationsFor("en"),
+		);
+	});
+
+	it("still checks every key and value inside an array", async () => {
 		await fsp.writeFile(
-			path.join(dir, "broken.json"),
-			JSON.stringify({ messages: ["one", "two"] }),
+			path.join(dir, "fr.json"),
+			'{"items": ["ok", {"constructor": "x"}]}',
+		);
+		await fsp.writeFile(
+			path.join(dir, "de.json"),
+			'{"items": ["ok", [{"nested": {"deeper": ["fine", null]}}]]}',
 		);
 		const loader = new FileSystemLoader({ rootDir: dir });
-		await expect(loader.load("broken")).rejects.toThrow(
-			/arrays are not allowed/,
-		);
+		await expect(loader.load("fr")).rejects.toThrow(/constructor/);
+		await expect(loader.load("de")).resolves.toEqual({
+			items: ["ok", [{ nested: { deeper: ["fine", null] } }]],
+		});
+	});
+
+	it("bounds array nesting like object nesting", async () => {
+		let deep: unknown = "leaf";
+		for (let i = 0; i < 200; i++) deep = [deep];
+		await fsp.writeFile(path.join(dir, "en.json"), JSON.stringify({ deep }));
+		await expect(
+			new FileSystemLoader({ rootDir: dir }).load("en"),
+		).rejects.toThrow(/nesting levels/);
 	});
 });
 

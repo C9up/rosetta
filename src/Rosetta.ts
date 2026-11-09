@@ -15,7 +15,13 @@ import { createLocaleStorage } from "./locale-storage.js";
 
 export type TranslationParams = Record<string, unknown>;
 export type MessageValue = string | number | boolean | null;
-export type MessageTree = { [key: string]: MessageValue | MessageTree };
+export type MessageTree = {
+	[key: string]: MessageValue | MessageTree | MessageTreeList;
+};
+/** A list in a catalog, flattened to index keys (`items.0`, `items.1`). */
+export type MessageTreeList = ReadonlyArray<
+	MessageValue | MessageTree | MessageTreeList
+>;
 export type MessageCatalog = Record<string, string>;
 export type Translations = Record<string, MessageCatalog>;
 

@@ -228,7 +228,11 @@ function validateCatalogValue(
 			`Translation catalog exceeds ${MAX_CATALOG_DEPTH} nesting levels`,
 		);
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
+	if (
+		!value ||
+		typeof value !== "object" ||
+		(depth === 0 && Array.isArray(value))
+	) {
 		throw new TypeError(
 			`Translation catalog '${pathLabel}' must be an object mapping or scalar value`,
 		);
@@ -241,11 +245,8 @@ function validateCatalogValue(
 			);
 		}
 		assertSafeKey(key);
-		if (Array.isArray(child)) {
-			throw new TypeError(
-				`Translation catalog arrays are not allowed at '${key}'`,
-			);
-		}
+		// An array is a mapping keyed by index (`items.0`, `items.1`), checked
+		// like any other: same depth, key and value limits.
 		if (child !== null && typeof child === "object") {
 			validateCatalogValue(child, `${pathLabel}.${key}`, depth + 1, state);
 		} else if (
@@ -358,17 +359,17 @@ function deepMerge(
 	for (const [key, value] of Object.entries(source)) {
 		assertSafeKey(key);
 		const existing = target[key];
-		if (
-			value !== null &&
-			typeof value === "object" &&
-			existing !== null &&
-			typeof existing === "object"
-		) {
+		// Lists are replaced whole, not merged index by index.
+		if (isMessageTree(value) && isMessageTree(existing)) {
 			deepMerge(existing, value);
 		} else {
 			target[key] = value;
 		}
 	}
+}
+
+function isMessageTree(value: unknown): value is MessageTree {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function assertSafeKey(key: string): void {
