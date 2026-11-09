@@ -2,6 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import DetectUserLocaleMiddleware, {
+	type I18nHttpContext,
+	type RequestValidatorLike,
+} from "../../src/middleware.js";
 import { Rosetta } from "../../src/Rosetta.js";
 import RosettaProvider, {
 	type RosettaAppContext,
@@ -225,6 +229,46 @@ describe("rosetta > RosettaProvider", () => {
 		const engine = { global: (n: string, v: unknown) => globals.set(n, v) };
 		enginePlugins[0]?.(engine);
 		expect(globals.get("t")).toBeTypeOf("function");
+	});
+
+	it("leaves validation untouched on a request the locale middleware did not run for", async () => {
+		const validator: RequestValidatorLike = {};
+		const app = buildApp(
+			{
+				defaultLocale: "en",
+				supportedLocales: ["en", "fr"],
+				messages: {
+					fr: {
+						validator: { shared: { messages: { required: "{field} requis" } } },
+					},
+				},
+			},
+			{ requestValidator: validator },
+		);
+		const provider = new RosettaProvider(app);
+		provider.register();
+		await provider.boot();
+
+		// No ctx.i18n: the validator keeps its own messages, as it would with
+		// no i18n installed at all, instead of every validateUsing throwing.
+		const bare: I18nHttpContext = {};
+		expect(validator.messagesProvider?.(bare)).toBeUndefined();
+
+		const manager = await app.container.resolve<Rosetta>(Rosetta);
+		const ctx: I18nHttpContext = {
+			request: { header: () => "fr" },
+		};
+		await new DetectUserLocaleMiddleware(manager).handle(
+			ctx,
+			async () => undefined,
+		);
+		const messages = validator.messagesProvider?.(ctx);
+		expect(
+			messages?.getMessage("The {field} field must be defined", "required", {
+				name: "email",
+				wildCardPath: "email",
+			}),
+		).toBe("email requis");
 	});
 
 	it("pushes the plugin through the engine module, never the container", async () => {

@@ -21,20 +21,25 @@ export interface I18nHttpContext {
 }
 
 export interface RequestValidatorLike {
-	messagesProvider?: (context: I18nHttpContext) => I18nMessagesProvider;
+	messagesProvider?: (
+		context: I18nHttpContext,
+	) => I18nMessagesProvider | undefined;
 }
 
 /** Request middleware equivalent to Adonis's generated locale detector. */
 export default class DetectUserLocaleMiddleware {
 	constructor(protected readonly manager: Rosetta = i18nManager) {}
 
-	static messagesProvider(context: I18nHttpContext): I18nMessagesProvider {
-		if (!context.i18n) {
-			throw new Error(
-				"Cannot create validation messages before locale detection",
-			);
-		}
-		return context.i18n.createMessagesProvider();
+	/**
+	 * The provider installs this hook at boot, so it also runs for requests the
+	 * locale middleware never saw (an API without it, a route outside its
+	 * tier). Without a request locale there is nothing to translate with, and
+	 * the validator keeps its own messages, as it would with no i18n at all.
+	 */
+	static messagesProvider(
+		context: I18nHttpContext,
+	): I18nMessagesProvider | undefined {
+		return context.i18n?.createMessagesProvider();
 	}
 
 	static registerMessagesProvider(validator: RequestValidatorLike): void {
