@@ -138,20 +138,25 @@ function formatRelativeAuto(
 
 /** Locale-aware value formatting. Mirrors AdonisJS's `Formatter`. */
 export class Formatter {
+	/** As given, so `i18n.locale` reads back what the application configured. */
 	#locale: string;
+	/** The lookup form, and what Intl gets: `fr_FR` is not a BCP 47 tag. */
+	#intlLocale: string;
 
 	constructor(locale: string) {
-		this.#locale = normalizeLocale(locale);
+		this.#locale = locale;
+		this.#intlLocale = normalizeLocale(locale);
 	}
 
-	/** The active locale, normalized. */
+	/** The active locale, as given. */
 	get locale(): string {
 		return this.#locale;
 	}
 
 	/** Point this instance at another locale, in place. */
 	switchLocale(locale: string): void {
-		this.#locale = normalizeLocale(locale);
+		this.#locale = locale;
+		this.#intlLocale = normalizeLocale(locale);
 	}
 
 	formatNumber(
@@ -159,7 +164,7 @@ export class Formatter {
 		options?: Intl.NumberFormatOptions,
 	): string {
 		const formatter = getNumberFormatter(
-			this.#locale,
+			this.#intlLocale,
 			options,
 		) as StringNumberFormat;
 		return formatter.format(value);
@@ -199,7 +204,7 @@ export class Formatter {
 		options?: Intl.DateTimeFormatOptions,
 	): string {
 		const date = new Date(normalizeDateTimeValue(value));
-		return getDateTimeFormatter(this.#locale, options).format(date);
+		return getDateTimeFormatter(this.#intlLocale, options).format(date);
 	}
 
 	/**
@@ -231,7 +236,7 @@ export class Formatter {
 		options?: Intl.RelativeTimeFormatOptions,
 	): string {
 		const diff = this.#getTimeDiff(value, unit);
-		const formatter = getRelativeTimeFormatter(this.#locale, options);
+		const formatter = getRelativeTimeFormatter(this.#intlLocale, options);
 		if (unit === "auto") {
 			return formatRelativeAuto(formatter, diff);
 		}
@@ -249,12 +254,12 @@ export class Formatter {
 		value: number | string,
 		options?: Intl.PluralRulesOptions,
 	): string {
-		return getPluralRules(this.#locale, options).select(Number(value));
+		return getPluralRules(this.#intlLocale, options).select(Number(value));
 	}
 
 	/** Format an iterable of strings into a locale-aware sentence list. */
 	formatList(list: Iterable<string>, options?: Intl.ListFormatOptions): string {
-		return getListFormatter(this.#locale, options).format(list);
+		return getListFormatter(this.#intlLocale, options).format(list);
 	}
 
 	/**
@@ -265,7 +270,7 @@ export class Formatter {
 		code: string,
 		options: Intl.DisplayNamesOptions,
 	): string | undefined {
-		return getDisplayNamesFormatter(this.#locale, options).of(code);
+		return getDisplayNamesFormatter(this.#intlLocale, options).of(code);
 	}
 
 	#getTimeDiff(

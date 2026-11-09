@@ -481,7 +481,10 @@ export class Rosetta {
 	#defaultLocale: string;
 	#fallbackLocale: string;
 	#fallbackLocales: Record<string, string>;
-	#supportedLocales?: Set<string>;
+	/** Normalized → as configured. Lookups are case-insensitive; answers are not. */
+	#supportedLocales?: Map<string, string>;
+	/** How each known locale is written, keyed by its normalized form. */
+	#spellings = new Map<string, string>();
 	#loaderEntries: Array<Loader | LoaderFactory>;
 	#formatter?: TranslationsFormatterContract;
 	#formatterFactory?: FormatterFactory;
@@ -506,15 +509,17 @@ export class Rosetta {
 		}
 		this.config = options;
 		this.#initialMessages = options.messages ?? {};
-		this.#defaultLocale = normalizeLocale(
+		this.#defaultLocale = this.#configure(
 			options.defaultLocale ?? DEFAULT_LOCALE,
 		);
-		this.#fallbackLocale = normalizeLocale(
-			options.fallbackLocale ?? this.#defaultLocale,
+		this.#fallbackLocale = options.fallbackLocale
+			? this.#configure(options.fallbackLocale)
+			: this.#defaultLocale;
+		this.#fallbackLocales = this.#configureFallbackMap(
+			options.fallbackLocales ?? {},
 		);
-		this.#fallbackLocales = normalizeFallbackMap(options.fallbackLocales ?? {});
 		this.#supportedLocales = options.supportedLocales
-			? new Set(options.supportedLocales.map(normalizeLocale))
+			? this.#configureList(options.supportedLocales)
 			: undefined;
 		this.#loaderEntries = options.loaders ?? [];
 		const formatter = options.formatter;
@@ -536,11 +541,13 @@ export class Rosetta {
 		await this.loadTranslations();
 	}
 
-	locale(locale = this.#defaultLocale): RosettaLocale {
-		return new RosettaLocale(this, normalizeLocale(locale), this.#emitter);
+	/** A request-scoped instance. Its `locale` is the string given, as written. */
+	locale(locale = this.defaultLocale): RosettaLocale {
+		return new RosettaLocale(this, locale, this.#emitter);
 	}
 
 	loadMessages(locale: string, messages: MessageTree | MessageCatalog): this {
+		this.#learnSpelling(locale);
 		mergeMessagesInto(this.#messages, locale, messages);
 		return this;
 	}
@@ -556,7 +563,7 @@ export class Rosetta {
 	}
 
 	getLocale(): string {
-		return this.#localeStorage.getStore() ?? this.#defaultLocale;
+		return this.#spell(this.#localeStorage.getStore() ?? this.#defaultLocale);
 	}
 
 	/** Run legacy manager-level helpers inside an isolated locale context. */
@@ -565,7 +572,7 @@ export class Rosetta {
 	}
 
 	setDefaultLocale(locale: string): this {
-		this.#defaultLocale = normalizeLocale(locale);
+		this.#defaultLocale = this.#configure(locale);
 		// Invalidate the number-format-data cache: even though the
 		// cache is keyed by the *resolved* locale (so most entries
 		// stay correct across config changes), an entry produced by
@@ -575,17 +582,17 @@ export class Rosetta {
 	}
 
 	getDefaultLocale(): string {
-		return this.#defaultLocale;
+		return this.#spell(this.#defaultLocale);
 	}
 
 	setSupportedLocales(locales: string[]): this {
-		this.#supportedLocales = new Set(locales.map(normalizeLocale));
+		this.#supportedLocales = this.#configureList(locales);
 		return this;
 	}
 
 	getSupportedLocales(): string[] | undefined {
 		return this.#supportedLocales
-			? Array.from(this.#supportedLocales)
+			? Array.from(this.#supportedLocales.values())
 			: undefined;
 	}
 
@@ -597,7 +604,7 @@ export class Rosetta {
 	 */
 	supportedLocales(): string[] {
 		if (this.#supportedLocales) {
-			return Array.from(this.#supportedLocales);
+			return Array.from(this.#supportedLocales.values());
 		}
 		const inferred = new Set<string>([this.#defaultLocale]);
 		for (const key of Object.keys(this.#fallbackLocales)) {
@@ -606,11 +613,11 @@ export class Rosetta {
 		for (const locale of Object.keys(this.#messages)) {
 			inferred.add(locale);
 		}
-		return Array.from(inferred);
+		return Array.from(inferred, (locale) => this.#spell(locale));
 	}
 
 	get defaultLocale(): string {
-		return this.#defaultLocale;
+		return this.#spell(this.#defaultLocale);
 	}
 
 	get hasCachedTranslations(): boolean {
@@ -636,7 +643,7 @@ export class Rosetta {
 	getFallbackLocaleFor(locale: string): string {
 		const normalized = normalizeLocale(locale);
 		const explicit = this.#fallbackLocales[normalized];
-		if (explicit) return explicit;
+		if (explicit) return this.#spell(explicit);
 		let closest:
 			| { locale: string; specificity: number; order: number }
 			| undefined;
@@ -653,8 +660,8 @@ export class Rosetta {
 				closest = { locale: candidateLocale, specificity, order };
 			}
 		}
-		if (closest) return closest.locale;
-		return this.#fallbackLocale || this.#defaultLocale;
+		if (closest) return this.#spell(closest.locale);
+		return this.#spell(this.#fallbackLocale || this.#defaultLocale);
 	}
 
 	setOnMissingTranslation(
@@ -682,27 +689,31 @@ export class Rosetta {
 	}
 
 	getFallbackMessage(identifier: string, locale: string): string | undefined {
-		return this.#fallback?.(identifier, normalizeLocale(locale));
+		return this.#fallback?.(identifier, this.#spell(normalizeLocale(locale)));
 	}
 
 	setFallbackLocale(locale: string): this {
-		this.#fallbackLocale = normalizeLocale(locale);
+		this.#fallbackLocale = this.#configure(locale);
 		this.#numberFormatDataCache.clear();
 		return this;
 	}
 
 	getFallbackLocale(): string {
-		return this.#fallbackLocale;
+		return this.#spell(this.#fallbackLocale);
 	}
 
 	setFallbackLocales(locales: Record<string, string>): this {
-		this.#fallbackLocales = normalizeFallbackMap(locales);
+		this.#fallbackLocales = this.#configureFallbackMap(locales);
 		this.#numberFormatDataCache.clear();
 		return this;
 	}
 
 	getFallbackLocales(): Record<string, string> {
-		return { ...this.#fallbackLocales };
+		const spelled: Record<string, string> = {};
+		for (const [from, to] of Object.entries(this.#fallbackLocales)) {
+			spelled[this.#spell(from)] = this.#spell(to);
+		}
+		return spelled;
 	}
 
 	resolveLocale(input: string | LocaleResolverInput): string {
@@ -717,14 +728,14 @@ export class Rosetta {
 				this.#localeChainFor(normalized),
 			);
 			if (supported) {
-				return supported;
+				return this.#spell(supported);
 			}
 		}
 
 		const fallback = this.#pickFirstSupported(
 			this.#localeChainFor(this.#defaultLocale),
 		);
-		return fallback ?? this.#defaultLocale;
+		return this.#spell(fallback ?? this.#defaultLocale);
 	}
 
 	/**
@@ -767,7 +778,7 @@ export class Rosetta {
 		// only through the fallback chain (`hasFallback: true`).
 		if (status !== "primary") {
 			const payload = {
-				locale: requestedLocale,
+				locale: this.#spell(requestedLocale),
 				identifier: key,
 				hasFallback: status === "fallback",
 			};
@@ -777,9 +788,10 @@ export class Rosetta {
 		// Missing everywhere with no inline `defaultValue`: honor the configured
 		// `fallback` fn, else return Adonis's `"translation missing: …"` string.
 		if (status === "missing" && options?.defaultValue === undefined) {
-			const custom = this.#fallback?.(key, requestedLocale);
+			const locale = this.#spell(requestedLocale);
+			const custom = this.#fallback?.(key, locale);
 			if (custom !== undefined) return custom;
-			return `translation missing: ${requestedLocale}, ${key}`;
+			return `translation missing: ${locale}, ${key}`;
 		}
 
 		for (const candidate of chain) {
@@ -1016,6 +1028,9 @@ export class Rosetta {
 			this.#createLoaders().map((loader) => this.#loadAllFromLoader(loader)),
 		);
 		for (const loadedTranslations of translationsStack) {
+			for (const locale of Object.keys(loadedTranslations)) {
+				this.#learnSpelling(locale);
+			}
 			mergeTranslationsInto(translations, loadedTranslations);
 		}
 		this.#messages = translations;
@@ -1052,7 +1067,7 @@ export class Rosetta {
 	): Promise<Record<string, MessageTree | MessageCatalog>> {
 		if ("loadAll" in loader && loader.loadAll) return loader.loadAll();
 		if (this.#supportedLocales && loader.load.length > 0) {
-			const locales = Array.from(this.#supportedLocales);
+			const locales = Array.from(this.#supportedLocales.keys());
 			const messages = await Promise.all(
 				locales.map((locale) => (loader as RosettaLoader).load(locale)),
 			);
@@ -1118,6 +1133,46 @@ export class Rosetta {
 		);
 	}
 
+	/** Record a configured locale's spelling (it wins over a catalog's) and
+	 * return its lookup form. */
+	#configure(locale: string): string {
+		const normalized = normalizeLocale(locale);
+		if (normalized) this.#spellings.set(normalized, locale.trim());
+		return normalized;
+	}
+
+	#configureList(locales: readonly string[]): Map<string, string> {
+		const list = new Map<string, string>();
+		for (const locale of locales) {
+			const normalized = this.#configure(locale);
+			if (normalized && !list.has(normalized)) {
+				list.set(normalized, locale.trim());
+			}
+		}
+		return list;
+	}
+
+	#configureFallbackMap(map: Record<string, string>): Record<string, string> {
+		const normalized: Record<string, string> = Object.create(null);
+		for (const [from, to] of Object.entries(map)) {
+			normalized[this.#configure(from)] = this.#configure(to);
+		}
+		return normalized;
+	}
+
+	/** A catalog's locale spelling, unless the config already wrote it. */
+	#learnSpelling(locale: string): void {
+		const normalized = normalizeLocale(locale);
+		if (normalized && !this.#spellings.has(normalized)) {
+			this.#spellings.set(normalized, locale.trim());
+		}
+	}
+
+	/** The spelling the application wrote, for a value handed back. */
+	#spell(normalized: string): string {
+		return this.#spellings.get(normalized) ?? normalized;
+	}
+
 	#localeChainFor(locale: string): string[] {
 		const chain: string[] = [];
 		const visited = new Set<string>();
@@ -1133,16 +1188,6 @@ export class Rosetta {
 
 		return chain;
 	}
-}
-
-function normalizeFallbackMap(
-	map: Record<string, string>,
-): Record<string, string> {
-	const normalized = Object.create(null) as Record<string, string>;
-	for (const [from, to] of Object.entries(map)) {
-		normalized[normalizeLocale(from)] = normalizeLocale(to);
-	}
-	return normalized;
 }
 
 function uniqueLocales(locales: readonly string[]): string[] {

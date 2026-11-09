@@ -79,8 +79,12 @@ describe("Formatter (AdonisJS parity)", () => {
 		);
 	});
 
-	it("normalizes the locale it is constructed with", () => {
-		expect(new Formatter(" FR_ch ").locale).toBe("fr-ch");
+	it("keeps the locale it is given and normalizes it for Intl only", () => {
+		const formatter = new Formatter("FR_ch");
+		expect(formatter.locale).toBe("FR_ch");
+		expect(formatter.formatNumber(0.5)).toBe(
+			new Intl.NumberFormat("fr-CH").format(0.5),
+		);
 	});
 
 	it("lets explicit currency options win over a stray style", () => {
@@ -117,8 +121,8 @@ describe("RosettaLocale extends Formatter", () => {
 		}).locale("en");
 
 		i18n.switchLocale("fr-CH");
-		expect(i18n.locale).toBe("fr-ch");
-		expect(i18n.getLocale()).toBe("fr-ch");
+		expect(i18n.locale).toBe("fr-CH");
+		expect(i18n.getLocale()).toBe("fr-CH");
 		expect(i18n.fallbackLocale).toBe("fr");
 		// Against Intl itself, not a pinned string: fr-CH's group separator has
 		// moved between CLDR releases (apostrophe vs U+202F), and the claim here is

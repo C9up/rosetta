@@ -255,7 +255,7 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 			supportedLocales: ["fr", "en-US"],
 			messages: { "en-US": { hello: "US" }, fr: { hello: "FR" } },
 		});
-		expect(manager.getFallbackLocaleFor("en")).toBe("en-us");
+		expect(manager.getFallbackLocaleFor("en")).toBe("en-US");
 		expect(manager.locale("en").t("hello")).toBe("US");
 	});
 

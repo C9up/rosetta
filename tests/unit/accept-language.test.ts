@@ -73,9 +73,9 @@ describe("rosetta > which side of the match is the more specific one", () => {
 	});
 
 	it("still prefers an exact offer over a broader one", () => {
-		// Normalized on the way out: `supportedLocales` is stored canonically.
-		expect(manager(["en", "en-GB"]).getSupportedLocaleFor("en-GB")).toBe(
-			"en-gb",
+		// Matched case-insensitively, answered with the configured spelling.
+		expect(manager(["en", "en-GB"]).getSupportedLocaleFor("en-gb")).toBe(
+			"en-GB",
 		);
 	});
 });

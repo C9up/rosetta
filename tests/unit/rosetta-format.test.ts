@@ -2,40 +2,49 @@ import { describe, expect, it } from "vitest";
 import { Rosetta, type RosettaLoader } from "../../src/Rosetta.js";
 
 describe("rosetta > Rosetta > locale getters/setters", () => {
-	it("constructor normalizes locale (case + underscore → dash)", () => {
-		const r = new Rosetta({ defaultLocale: "EN_US" });
-		expect(r.getLocale()).toBe("en-us");
-		expect(r.getDefaultLocale()).toBe("en-us");
+	it("constructor keeps the default locale as written, matched loosely", () => {
+		const r = new Rosetta({
+			defaultLocale: "EN_US",
+			messages: { "en-us": { a: "A" } },
+		});
+		expect(r.getLocale()).toBe("EN_US");
+		expect(r.getDefaultLocale()).toBe("EN_US");
+		// Case and underscore are lookup details: the catalog is still found.
+		expect(r.t("a")).toBe("A");
 	});
 
-	it("setLocale + setDefaultLocale + setFallbackLocale all normalize", () => {
+	it("setLocale + setDefaultLocale + setFallbackLocale keep the configured spelling", () => {
 		const r = new Rosetta();
-		r.setLocale("FR_CA");
 		r.setDefaultLocale("EN_GB");
 		r.setFallbackLocale("DE");
+		r.setLocale("en_gb");
+		// The ambient locale reads back as the configured locale it matches.
+		expect(r.getLocale()).toBe("EN_GB");
+		expect(r.getDefaultLocale()).toBe("EN_GB");
+		expect(r.getFallbackLocale()).toBe("DE");
+		// An unconfigured locale has no spelling to restore: its lookup form.
+		r.setLocale("FR_CA");
 		expect(r.getLocale()).toBe("fr-ca");
-		expect(r.getDefaultLocale()).toBe("en-gb");
-		expect(r.getFallbackLocale()).toBe("de");
 	});
 
-	it("setSupportedLocales stores normalized values", () => {
+	it("setSupportedLocales keeps the values as written", () => {
 		const r = new Rosetta();
 		r.setSupportedLocales(["EN_US", "fr_CA"]);
-		const supported = r.getSupportedLocales();
-		expect(supported).toContain("en-us");
-		expect(supported).toContain("fr-ca");
+		expect(r.getSupportedLocales()).toEqual(["EN_US", "fr_CA"]);
+		expect(r.getSupportedLocaleFor("fr-ca")).toBe("fr_CA");
 	});
 
-	it("setFallbackLocales / getFallbackLocales normalize keys and values", () => {
-		const r = new Rosetta();
+	it("setFallbackLocales / getFallbackLocales keep keys and values as written", () => {
+		const r = new Rosetta({ messages: { fr: { a: "FR" } } });
 		r.setFallbackLocales({ FR_CA: "FR", EN_GB: "EN" });
-		expect(r.getFallbackLocales()).toEqual({ "fr-ca": "fr", "en-gb": "en" });
+		expect(r.getFallbackLocales()).toEqual({ FR_CA: "FR", EN_GB: "EN" });
+		expect(r.locale("fr-ca").t("a")).toBe("FR");
 	});
 
 	it("locale() builds a request-scoped RosettaLocale exposing the locale verbatim", () => {
 		const r = new Rosetta({ defaultLocale: "en" });
 		const fr = r.locale("FR_CA");
-		expect(fr.getLocale()).toBe("fr-ca");
+		expect(fr.getLocale()).toBe("FR_CA");
 	});
 });
 
