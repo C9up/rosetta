@@ -25,6 +25,11 @@ inspect(entry)
 console.log(`${TAG} static import graph verified (${visited.size} modules, zero Node.js builtins)`)
 
 const nodeProcess = globalThis.process
+const rejections = []
+const onRejection = (reason) => {
+  rejections.push(reason)
+}
+nodeProcess.on('unhandledRejection', onRejection)
 try {
   globalThis.process = undefined
   const browser = await import(`${pathToFileURL(entry)}?browser-smoke`)
@@ -44,7 +49,34 @@ try {
   if (!fileSystemRejected) {
     throw new Error(`${TAG} browser FileSystemLoader did not fail explicitly`)
   }
+
+  // The emitter-form constructor with a listener that throws: the failure is
+  // reported, and the report itself must not need a Node global.
+  const reportError = console.error
+  console.error = () => {}
+  try {
+    const missing = new browser.Rosetta(
+      {
+        emit() {
+          throw new Error('listener down')
+        },
+      },
+      { defaultLocale: 'en' },
+    ).locale('en').t('missing.key')
+    if (missing !== 'translation missing: en, missing.key') {
+      throw new Error(`${TAG} missing key returned ${JSON.stringify(missing)}`)
+    }
+    // Let the report run while `process` is still gone.
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+  } finally {
+    console.error = reportError
+  }
 } finally {
   globalThis.process = nodeProcess
+}
+await new Promise((resolve) => setTimeout(resolve, 0))
+nodeProcess.off('unhandledRejection', onRejection)
+if (rejections.length > 0) {
+  throw new Error(`${TAG} unhandled rejection in the browser runtime: ${rejections[0]}`)
 }
 console.log(`${TAG} runtime fallback smoke passed`)

@@ -317,10 +317,12 @@ export class RosettaLocale extends Formatter {
 						identifier: key,
 						hasFallback: resolved?.isFallback ?? false,
 					}))().catch((error: unknown) => {
-					process.stderr.write(
+					// `console`, not `process.stderr`: this file also runs in the
+					// browser, where a Node global would throw inside this handler.
+					console.error(
 						`[rosetta] 'i18n:missing:translation' listener failed: ${
 							error instanceof Error ? error.message : String(error)
-						}\n`,
+						}`,
 					);
 				});
 			}
