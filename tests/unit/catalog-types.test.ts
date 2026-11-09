@@ -3,6 +3,7 @@
  * the assertions pin the emitted types; `tests/types/typed-keys.fixture.ts`
  * (run by `pnpm test:types`) proves the result actually constrains `t()`.
  */
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { generateCatalogTypes } from "../../src/CatalogTypes.js";
 
@@ -68,12 +69,69 @@ describe("generateCatalogTypes", () => {
 		expect(out).toContain("'good': Record<string, never>");
 		expect(out).not.toContain("'broken':");
 		expect(out).toContain("Skipped 1 key(s)");
-		expect(out).toContain("//   broken");
+		expect(out).toContain("//   'broken'");
 	});
 
 	it("escapes quotes in keys and variable names", () => {
 		const out = generateCatalogTypes({ en: { "it's": "Hi {name}" } });
 		expect(out).toContain("'it\\'s'");
+	});
+
+	it("treats keys and variable names as data, never as source", () => {
+		const hostile = [
+			"line\nconst y = 1",
+			"cr\rexport const z = 2",
+			"ls\u2028export const w = 3",
+			"ps\u2029export const v = 4",
+			"quote' + process.exit(1) + '",
+			"back\\slash",
+			"nul\u0000tab\t",
+			"lone\ud800surrogate",
+		];
+		const catalog: Record<string, string> = {};
+		for (const key of hostile) catalog[key] = "Hi {name}";
+		// The same strings as variable names, one message each, and as keys of
+		// messages that do not parse (those are listed in a trailing comment).
+		hostile.forEach((name, i) => {
+			catalog[`p${i}`] = `{${name}}`;
+		});
+		for (const key of hostile) catalog[`${key} broken`] = "{n, plural, one {#}";
+		const out = generateCatalogTypes({ en: catalog });
+
+		const transpiled = ts.transpileModule(out, {
+			reportDiagnostics: true,
+			compilerOptions: { target: ts.ScriptTarget.ES2022 },
+		});
+		expect(transpiled.diagnostics ?? []).toEqual([]);
+
+		const source = ts.createSourceFile(
+			"i18n.d.ts",
+			out,
+			ts.ScriptTarget.ES2022,
+		);
+		const kinds = source.statements.map(
+			(statement) => ts.SyntaxKind[statement.kind],
+		);
+		expect(kinds).toEqual(["ImportDeclaration", "ModuleDeclaration"]);
+		// Every broken key is listed (a name ICU itself rejects adds its `p`).
+		const listed = /Skipped (\d+) key\(s\)/.exec(out)?.[1];
+		expect(Number(listed)).toBeGreaterThanOrEqual(hostile.length);
+		expect(out).toContain(
+			"'p0': { 'line\\u000aconst y = 1': string | number }",
+		);
+		expect(out).toContain(
+			"'p2': { 'ls\\u2028export const w = 3': string | number }",
+		);
+		// Every line of the trailing listing is still a comment.
+		const tail = out.slice(out.indexOf("// Skipped"));
+		for (const line of tail.split(/\r\n|\r|\n|\u2028|\u2029/)) {
+			expect(line === "" || line.startsWith("//")).toBe(true);
+		}
+	});
+
+	it("keeps a printable non-ASCII key readable", () => {
+		const out = generateCatalogTypes({ en: { "café.menu": "Menu" } });
+		expect(out).toContain("'café.menu': Record<string, never>");
 	});
 
 	it("handles no catalogs and an unknown reference locale", () => {
