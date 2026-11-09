@@ -187,6 +187,7 @@ export interface NumberFormatData {
 }
 
 const DEFAULT_LOCALE = "en";
+const NUMBER_FORMAT_DATA_CACHE_SIZE = 256;
 
 export class RosettaLocale extends Formatter {
 	#manager: Rosetta;
@@ -912,8 +913,13 @@ export class Rosetta {
 	 */
 	getNumberFormatData(locale: string = this.getLocale()): NumberFormatData {
 		const resolved = this.#resolveNumberLocale(locale);
-		const cached = this.#numberFormatDataCache.get(resolved);
-		if (cached) return cached;
+		const cache = this.#numberFormatDataCache;
+		const cached = cache.get(resolved);
+		if (cached) {
+			cache.delete(resolved);
+			cache.set(resolved, cached);
+			return cached;
+		}
 		const formatter = getNumberFormatter(resolved);
 		const negativeParts = formatter.formatToParts(-12345.6);
 		const positiveParts = getNumberFormatter(resolved, {
@@ -925,7 +931,14 @@ export class Rosetta {
 			minus: negativeParts.find((p) => p.type === "minusSign")?.value ?? "-",
 			plusSign: positiveParts.find((p) => p.type === "plusSign")?.value ?? "+",
 		};
-		this.#numberFormatDataCache.set(resolved, data);
+		// LRU-bounded like the Intl formatter caches: every well-formed tag
+		// (`en-x-…` included) resolves to itself, and apps build locales from
+		// user input.
+		if (cache.size >= NUMBER_FORMAT_DATA_CACHE_SIZE) {
+			const oldest = cache.keys().next().value;
+			if (oldest !== undefined) cache.delete(oldest);
+		}
+		cache.set(resolved, data);
 		return data;
 	}
 

@@ -7,6 +7,31 @@ import { describe, expect, it } from "vitest";
 import { Rosetta } from "../../src/Rosetta.js";
 
 describe("Rosetta.getNumberFormatData", () => {
+	it("keeps a bounded cache however many locales callers invent", () => {
+		const r = new Rosetta({ defaultLocale: "en" });
+		const first = r.getNumberFormatData("en-x-first");
+		expect(r.getNumberFormatData("en-x-first")).toBe(first);
+		// Private-use tags are well formed, so each one resolves to itself: a
+		// locale taken from user input could otherwise grow the heap forever.
+		for (let i = 0; i < 10_000; i++) {
+			const data = r.getNumberFormatData(`en-x-u${i.toString(36)}`);
+			expect(data.decimal).toBe(".");
+		}
+		const again = r.getNumberFormatData("en-x-first");
+		expect(again).not.toBe(first);
+		expect(again).toEqual(first);
+	});
+
+	it("keeps a recently used locale cached", () => {
+		const r = new Rosetta({ defaultLocale: "en" });
+		const fr = r.getNumberFormatData("fr-FR");
+		for (let i = 0; i < 1_000; i++) {
+			r.getNumberFormatData(`en-x-u${i.toString(36)}`);
+			// Read between every insertion, so it never becomes the oldest.
+			expect(r.getNumberFormatData("fr-FR")).toBe(fr);
+		}
+	});
+
 	it('returns the fr-FR separators for "fr-FR"', () => {
 		const r = new Rosetta();
 		const data = r.getNumberFormatData("fr-FR");
