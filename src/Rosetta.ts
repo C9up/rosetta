@@ -216,18 +216,40 @@ export class RosettaLocale extends Formatter {
 		localeOrEmitter: string | MissingTranslationEmitter,
 		emitterOrManager?: MissingTranslationEmitter | Rosetta,
 	) {
-		super(
-			typeof managerOrLocale === "string"
-				? managerOrLocale
-				: (localeOrEmitter as string),
-		);
+		// The two overloads, told apart by what each argument IS rather than
+		// trusted: a call that matches neither fails here, not on first use.
+		let manager: Rosetta;
+		let locale: string;
+		let emitter: MissingTranslationEmitter | undefined;
 		if (typeof managerOrLocale === "string") {
-			this.#emitter = localeOrEmitter as MissingTranslationEmitter;
-			this.#manager = emitterOrManager as Rosetta;
+			if (
+				typeof localeOrEmitter === "string" ||
+				emitterOrManager === undefined ||
+				isEmitter(emitterOrManager)
+			) {
+				throw new TypeError(
+					"I18n(locale, emitter, manager) expects an emitter and a manager",
+				);
+			}
+			locale = managerOrLocale;
+			emitter = localeOrEmitter;
+			manager = emitterOrManager;
 		} else {
-			this.#manager = managerOrLocale;
-			this.#emitter = emitterOrManager as MissingTranslationEmitter | undefined;
+			if (
+				typeof localeOrEmitter !== "string" ||
+				(emitterOrManager !== undefined && !isEmitter(emitterOrManager))
+			) {
+				throw new TypeError(
+					"RosettaLocale(manager, locale, emitter?) expects a locale string",
+				);
+			}
+			locale = localeOrEmitter;
+			emitter = emitterOrManager;
+			manager = managerOrLocale;
 		}
+		super(locale);
+		this.#manager = manager;
+		this.#emitter = emitter;
 		this.fallbackLocale = this.#manager.getFallbackLocaleFor(this.locale);
 	}
 
@@ -410,13 +432,17 @@ export class I18nMessagesProvider {
 
 		// The metadata is reused in the serialized error, so matching Adonis
 		// requires translating these entries in place as well as in the message.
-		if (meta.otherField !== undefined) {
-			meta.otherField = this.translateField(meta.otherField as string | number);
+		// Only a field name is translated; anything else a validator put there is
+		// left as it came.
+		const { otherField, originalField } = meta;
+		if (typeof otherField === "string" || typeof otherField === "number") {
+			meta.otherField = this.translateField(otherField);
 		}
-		if (meta.originalField !== undefined) {
-			meta.originalField = this.translateField(
-				meta.originalField as string | number,
-			);
+		if (
+			typeof originalField === "string" ||
+			typeof originalField === "number"
+		) {
+			meta.originalField = this.translateField(originalField);
 		}
 		const data = { field: fieldName, ...meta };
 		for (const identifier of [
@@ -470,7 +496,7 @@ function interpolateValidationMessage(
 				) {
 					return placeholder;
 				}
-				value = (value as Record<string, unknown>)[segment];
+				value = Reflect.get(value, segment);
 			}
 			return value === null || value === undefined ? "" : String(value);
 		},
@@ -511,9 +537,18 @@ export class Rosetta {
 		optionsOrEmitter: RosettaOptions | MissingTranslationEmitter = {},
 		managerConfig?: I18nManagerConfig,
 	) {
-		const options = managerConfig ?? (optionsOrEmitter as RosettaOptions);
+		let options: RosettaOptions;
 		if (managerConfig) {
-			this.#emitter = optionsOrEmitter as MissingTranslationEmitter;
+			if (!isEmitter(optionsOrEmitter)) {
+				throw new TypeError("I18nManager(emitter, config) expects an emitter");
+			}
+			this.#emitter = optionsOrEmitter;
+			options = managerConfig;
+		} else {
+			if (isEmitter(optionsOrEmitter)) {
+				throw new TypeError("I18nManager(emitter, config) expects a config");
+			}
+			options = optionsOrEmitter;
 		}
 		this.config = options;
 		this.#initialMessages = options.messages ?? {};
@@ -976,10 +1011,9 @@ export class Rosetta {
 		locale = this.getLocale(),
 	): string {
 		const resolved = this.#resolveNumberLocale(locale);
-		const formatter = getNumberFormatter(
-			resolved,
-			options,
-		) as StringNumberFormat;
+		// Intl formats a numeric string without going through a float, which
+		// is the point of this method; the lib types only list numbers.
+		const formatter: StringNumberFormat = getNumberFormatter(resolved, options);
 		return formatter.format(value);
 	}
 
@@ -1028,7 +1062,7 @@ export class Rosetta {
 	}
 
 	async #reloadTranslations(): Promise<void> {
-		const translations = Object.create(null) as Record<string, MessageCatalog>;
+		const translations: Record<string, MessageCatalog> = Object.create(null);
 		for (const [locale, messages] of Object.entries(this.#initialMessages)) {
 			mergeMessagesInto(translations, locale, messages);
 		}
@@ -1074,25 +1108,24 @@ export class Rosetta {
 		loader: Loader,
 	): Promise<Record<string, MessageTree | MessageCatalog>> {
 		if ("loadAll" in loader && loader.loadAll) return loader.loadAll();
-		if (this.#supportedLocales && loader.load.length > 0) {
-			const locales = Array.from(this.#supportedLocales.keys());
+		if (!loadsAllLocales(loader)) {
+			// A per-locale loader cannot list its locales: ask it for the
+			// configured ones, or the default one when none are configured.
+			const locales = this.#supportedLocales
+				? Array.from(this.#supportedLocales.keys())
+				: [this.#defaultLocale];
 			const messages = await Promise.all(
-				locales.map((locale) => (loader as RosettaLoader).load(locale)),
+				locales.map((locale) => loader.load(locale)),
 			);
-			const translations = Object.create(null) as Record<
-				string,
-				MessageTree | MessageCatalog
-			>;
+			const translations: Record<string, MessageTree | MessageCatalog> =
+				Object.create(null);
 			for (const [index, locale] of locales.entries()) {
 				const localeMessages = messages[index];
 				if (localeMessages) translations[locale] = localeMessages;
 			}
 			return translations;
 		}
-		return (
-			(await (loader as TranslationsLoaderContract).load()) ??
-			Object.create(null)
-		);
+		return (await loader.load()) ?? Object.create(null);
 	}
 
 	async #loadLocaleFromLoader(
@@ -1106,7 +1139,10 @@ export class Rosetta {
 			);
 			return matchingLocale ? translations[matchingLocale] : undefined;
 		}
-		return (loader as RosettaLoader).load(locale);
+		if (!loadsAllLocales(loader)) return loader.load(locale);
+		// Asked for one locale, an argument-less `load()` answers with that
+		// locale's catalog: it would ignore the locale passed anyway.
+		return loader.load();
 	}
 
 	/**
@@ -1357,7 +1393,26 @@ function compareLanguageMatches(
  * up.
  */
 function emptyCatalog(): MessageCatalog {
-	return Object.create(null) as MessageCatalog;
+	const catalog: MessageCatalog = Object.create(null);
+	return catalog;
+}
+
+/** An Adonis-style emitter, told apart from a manager or a config by `emit`. */
+function isEmitter(value: unknown): value is MissingTranslationEmitter {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof Reflect.get(value, "emit") === "function"
+	);
+}
+
+/**
+ * A loader that returns every locale from one `load()`, as opposed to one
+ * locale per call. Told apart by arity, the only thing that differs at run
+ * time.
+ */
+function loadsAllLocales(loader: Loader): loader is TranslationsLoaderContract {
+	return loader.load.length === 0;
 }
 
 function flattenMessages(
@@ -1373,7 +1428,7 @@ const MAX_CATALOG_KEYS = 100_000;
 
 function walkFlatten(
 	prefix: string,
-	value: MessageTree | MessageCatalog | MessageValue,
+	value: MessageTree | MessageCatalog | MessageTreeList | MessageValue,
 	out: MessageCatalog,
 	depth: number,
 	state: { keys: number },
@@ -1404,13 +1459,7 @@ function walkFlatten(
 		}
 		assertSafeMessageKey(key);
 		const next = prefix ? `${prefix}.${key}` : key;
-		walkFlatten(
-			next,
-			child as MessageTree | MessageCatalog | MessageValue,
-			out,
-			depth + 1,
-			state,
-		);
+		walkFlatten(next, child, out, depth + 1, state);
 	}
 }
 

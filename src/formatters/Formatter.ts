@@ -163,10 +163,12 @@ export class Formatter {
 		value: string | number | bigint,
 		options?: Intl.NumberFormatOptions,
 	): string {
-		const formatter = getNumberFormatter(
+		// Intl takes a numeric string as-is (no float on the way); the lib
+		// types only list numbers, so the wider view is spelled out here.
+		const formatter: StringNumberFormat = getNumberFormatter(
 			this.#intlLocale,
 			options,
-		) as StringNumberFormat;
+		);
 		return formatter.format(value);
 	}
 

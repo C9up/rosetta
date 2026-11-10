@@ -199,7 +199,7 @@ export class IcuFormatter implements TranslationsFormatterContract {
 			IcuFormatter.customFormats[type] = created;
 			formats = created;
 		}
-		formats[key] = options as never;
+		Reflect.set(formats, key, options);
 	}
 
 	format(
@@ -1109,7 +1109,7 @@ function formatNumberSkeleton(
 	}
 	const formatter = getNumberFormatter(
 		locale,
-		parsed.options as Intl.NumberFormatOptions,
+		intlNumberOptions(parsed.options),
 	);
 	const needsPartTransforms =
 		parsed.hideUnit ||
@@ -1194,15 +1194,35 @@ function transformExponentParts(
 	});
 }
 
+const DATE_TIME_STYLES = ["full", "long", "medium", "short"] as const;
+
+function isDateTimeStyle(
+	style: string,
+): style is (typeof DATE_TIME_STYLES)[number] {
+	return DATE_TIME_STYLES.some((known) => known === style);
+}
+
+/**
+ * Skeleton options as Intl takes them. Node 24 accepts every one of them, but
+ * the ES2022 lib this package compiles against (and so must its consumers,
+ * who compile its source) does not list `useGrouping: "min2"`, `roundingMode`
+ * and the rest. Copied rather than retyped, so nothing claims a shape it lacks.
+ */
+function intlNumberOptions(
+	options: ExtendedNumberFormatOptions,
+): Intl.NumberFormatOptions {
+	const intl: Intl.NumberFormatOptions = {};
+	Object.assign(intl, options);
+	return intl;
+}
+
 function parseDateStyle(
 	style: string,
 	type: "date" | "time",
 ): Intl.DateTimeFormatOptions {
 	if (!style) return type === "time" ? { timeStyle: "medium" } : {};
-	if (["full", "long", "medium", "short"].includes(style)) {
-		return type === "time"
-			? { timeStyle: style as Intl.DateTimeFormatOptions["timeStyle"] }
-			: { dateStyle: style as Intl.DateTimeFormatOptions["dateStyle"] };
+	if (isDateTimeStyle(style)) {
+		return type === "time" ? { timeStyle: style } : { dateStyle: style };
 	}
 	if (!style.startsWith("::")) {
 		throw new SyntaxError(`Unsupported ICU ${type} style '${style}'`);
@@ -1319,12 +1339,16 @@ function normalizeDate(value: unknown): Date | number {
 		return date;
 	}
 	if (value && typeof value === "object") {
-		const candidate = value as {
-			toJSDate?: () => Date;
-			toMillis?: () => number;
-		};
-		if (typeof candidate.toJSDate === "function") return candidate.toJSDate();
-		if (typeof candidate.toMillis === "function") return candidate.toMillis();
+		const toJSDate: unknown = Reflect.get(value, "toJSDate");
+		if (typeof toJSDate === "function") {
+			const date: unknown = Reflect.apply(toJSDate, value, []);
+			if (date instanceof Date) return date;
+		}
+		const toMillis: unknown = Reflect.get(value, "toMillis");
+		if (typeof toMillis === "function") {
+			const millis: unknown = Reflect.apply(toMillis, value, []);
+			if (typeof millis === "number") return millis;
+		}
 	}
 	throw new TypeError(
 		"ICU date/time values must be Date, timestamp, ISO string, or Luxon-like DateTime",

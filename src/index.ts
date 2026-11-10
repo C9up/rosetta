@@ -108,63 +108,94 @@ export interface ResolvableConfig<T> {
 
 type ConfigValue<T> = T | ResolvableConfig<T>;
 
-export type DefinedI18nConfig = Omit<
-	RosettaProviderConfig,
-	"defaultLocale" | "formatter" | "loaders"
-> &
-	I18nManagerConfig &
-	ResolvableConfig<I18nManagerConfig>;
+/**
+ * What `defineConfig` returns: the config as written, defaults applied, and a
+ * hidden `resolver` that turns provider-style values into factories. The
+ * formatter and loaders keep their given types, so passing the result straight
+ * to `new Rosetta()` type-checks only when they already are factories.
+ */
+export type DefinedI18nConfig<
+	F extends ConfigValue<FormatterFactory> = FormatterFactory,
+	L extends ConfigValue<LoaderFactory> = LoaderFactory,
+> = Omit<RosettaProviderConfig, "defaultLocale" | "formatter" | "loaders"> & {
+	defaultLocale: string;
+	formatter: F;
+	loaders: L[];
+} & ResolvableConfig<I18nManagerConfig>;
 
+/** Factories given: the result is a ready `RosettaOptions` as well. */
+export function defineConfig(
+	config: Omit<RosettaProviderConfig, "formatter" | "loaders"> & {
+		formatter: FormatterFactory;
+		loaders?: LoaderFactory[];
+	},
+): DefinedI18nConfig;
+/** Provider-style values given: only `resolver()` yields usable options. */
 export function defineConfig(
 	config: Omit<RosettaProviderConfig, "formatter" | "loaders"> & {
 		formatter: ConfigValue<FormatterFactory>;
 		loaders?: ConfigValue<LoaderFactory>[];
 	},
-): DefinedI18nConfig {
+): DefinedI18nConfig<ConfigValue<FormatterFactory>, ConfigValue<LoaderFactory>>;
+export function defineConfig(
+	config: Omit<RosettaProviderConfig, "formatter" | "loaders"> & {
+		formatter: ConfigValue<FormatterFactory>;
+		loaders?: ConfigValue<LoaderFactory>[];
+	},
+): DefinedI18nConfig<
+	ConfigValue<FormatterFactory>,
+	ConfigValue<LoaderFactory>
+> {
 	if (!config.formatter) {
 		throw new Error(
 			'Cannot configure i18n manager. Missing property "formatter"',
 		);
 	}
 
-	const defined = {
-		defaultLocale: "en",
-		loaders: [],
-		...config,
-	} as DefinedI18nConfig;
-	Object.defineProperty(defined, "resolver", {
-		enumerable: false,
-		value: async (app: unknown): Promise<I18nManagerConfig> => ({
-			...defined,
-			formatter: await resolveFactory(defined.formatter, app),
+	const { defaultLocale = "en", formatter, loaders = [], ...rest } = config;
+	return withResolver(
+		{ ...rest, defaultLocale, formatter, loaders },
+		async (app: unknown): Promise<I18nManagerConfig> => ({
+			...rest,
+			defaultLocale,
+			formatter: await resolveConfigValue<FormatterFactory>(formatter, app),
 			loaders: await Promise.all(
-				defined.loaders.map((loader) => resolveFactory(loader, app)),
+				loaders.map((loader) => resolveConfigValue<LoaderFactory>(loader, app)),
 			),
 		}),
-	});
-	return defined;
+	);
 }
 
-type ResolvableFactory<T> = T & Partial<ResolvableConfig<T>>;
-
-async function resolveFactory<T>(factory: ResolvableFactory<T>, app: unknown) {
-	return typeof factory.resolver === "function"
-		? factory.resolver(app)
-		: factory;
+function isResolvable<T>(value: ConfigValue<T>): value is ResolvableConfig<T> {
+	return (
+		(typeof value === "object" || typeof value === "function") &&
+		value !== null &&
+		typeof Reflect.get(value, "resolver") === "function"
+	);
 }
 
-function withResolver<T extends object>(value: T): T & ResolvableConfig<T> {
-	Object.defineProperty(value, "resolver", {
-		enumerable: false,
-		value: async () => value,
-	});
-	return value as T & ResolvableConfig<T>;
+async function resolveConfigValue<T>(
+	value: ConfigValue<T>,
+	app: unknown,
+): Promise<T> {
+	return isResolvable(value) ? value.resolver(app) : value;
+}
+
+/** Attach `resolver` out of enumeration, so spreading the config drops it. */
+function withResolver<T extends object, R>(
+	value: T,
+	resolver: (app: unknown) => Promise<R>,
+): T & ResolvableConfig<R> {
+	const resolvable = Object.assign(value, { resolver });
+	Object.defineProperty(resolvable, "resolver", { enumerable: false });
+	return resolvable;
 }
 
 /** AdonisJS-compatible formatter factories. */
 export const formatters = {
 	icu(): FormatterFactory & ResolvableConfig<FormatterFactory> {
-		return withResolver(() => new IcuFormatter());
+		const factory: FormatterFactory = () => new IcuFormatter();
+		return withResolver(factory, async () => factory);
 	},
 };
 
@@ -173,6 +204,7 @@ export const loaders = {
 	fs(
 		config: FileSystemLoaderOptions,
 	): LoaderFactory & ResolvableConfig<LoaderFactory> {
-		return withResolver(() => new FileSystemLoader(config));
+		const factory: LoaderFactory = () => new FileSystemLoader(config);
+		return withResolver(factory, async () => factory);
 	},
 };

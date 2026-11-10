@@ -160,8 +160,9 @@ export default class RosettaProvider {
 				this.#unsubscribeMissing = rosetta.onMissingTranslation((payload) => {
 					const emitted = emitter.emit("i18n:missing:translation", payload);
 					if (
-						emitted &&
-						typeof (emitted as PromiseLike<unknown>).then === "function"
+						typeof emitted === "object" &&
+						emitted !== null &&
+						typeof Reflect.get(emitted, "then") === "function"
 					) {
 						void Promise.resolve(emitted).catch(() => undefined);
 					}

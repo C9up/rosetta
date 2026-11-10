@@ -25,12 +25,16 @@ class BrowserLocaleStorage<T> implements LocaleStorage<T> {
 			if (
 				typeof result === "object" &&
 				result !== null &&
-				"finally" in result &&
-				typeof result.finally === "function"
+				typeof Reflect.get(result, "then") === "function"
 			) {
-				return result.finally(() => {
+				// Restore once the async callback settles. The reaction is
+				// registered before the caller's, so it runs first; the caller
+				// still gets the callback's own promise back.
+				const restore = () => {
 					this.#value = previous;
-				}) as R;
+				};
+				Promise.resolve(result).then(restore, restore);
+				return result;
 			}
 			this.#value = previous;
 			return result;
@@ -51,10 +55,18 @@ if (isNode) {
 	// Keep the specifier non-literal so browser bundlers do not resolve a Node
 	// builtin that can never execute in their runtime.
 	const specifier = ["node", "async_hooks"].join(":");
-	const asyncHooks = (await import(specifier)) as {
-		AsyncLocalStorage: AsyncLocalStorageConstructor;
-	};
-	Storage = asyncHooks.AsyncLocalStorage;
+	const asyncHooks: unknown = await import(specifier);
+	const nodeStorage =
+		typeof asyncHooks === "object" && asyncHooks !== null
+			? Reflect.get(asyncHooks, "AsyncLocalStorage")
+			: undefined;
+	if (isStorageConstructor(nodeStorage)) Storage = nodeStorage;
+}
+
+function isStorageConstructor(
+	value: unknown,
+): value is AsyncLocalStorageConstructor {
+	return typeof value === "function";
 }
 
 export function createLocaleStorage<T>(): LocaleStorage<T> {

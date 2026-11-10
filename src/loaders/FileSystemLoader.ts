@@ -50,8 +50,7 @@ export class FileSystemLoader implements RosettaLoader {
 		try {
 			entries = await fsp.readdir(this.#rootDir, { withFileTypes: true });
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT")
-				return translations;
+			if (errorCode(error) === "ENOENT") return translations;
 			throw error;
 		}
 		entries.sort(compareDirectoryEntries);
@@ -117,7 +116,7 @@ export class FileSystemLoader implements RosettaLoader {
 				if (candidate.toLowerCase() === lower) return candidate;
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			if (errorCode(error) !== "ENOENT") throw error;
 		}
 		return locale;
 	}
@@ -139,8 +138,7 @@ export class FileSystemLoader implements RosettaLoader {
 				// (permission denied, invalid JSON, disk failure) is a real problem
 				// that must surface — silently swallowing it would turn a config bug
 				// into a "missing translation" ghost that's impossible to debug in prod.
-				const code = (err as NodeJS.ErrnoException)?.code;
-				if (code === "ENOENT") continue;
+				if (errorCode(err) === "ENOENT") continue;
 				throw err;
 			}
 		}
@@ -368,6 +366,11 @@ function deepMerge(
 	}
 }
 
+/** The `code` of a Node system error (`ENOENT`, …), if it is one. */
+function errorCode(error: unknown): unknown {
+	return error instanceof Error ? Reflect.get(error, "code") : undefined;
+}
+
 function isMessageTree(value: unknown): value is MessageTree {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -583,7 +586,9 @@ function parseScalar(value: string): string | number | boolean | null {
 		if (!value.endsWith('"'))
 			throw new SyntaxError("Unclosed double-quoted YAML scalar");
 		try {
-			return JSON.parse(value) as string;
+			const parsed: unknown = JSON.parse(value);
+			if (typeof parsed === "string") return parsed;
+			throw new SyntaxError("Not a JSON string");
 		} catch (error) {
 			throw new SyntaxError("Invalid double-quoted YAML scalar", {
 				cause: error,
