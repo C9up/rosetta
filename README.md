@@ -1,7 +1,8 @@
 # @c9up/rosetta
 
-Internationalization for Ream applications with an API aligned with
-`@adonisjs/i18n`. Rosetta has no runtime npm dependency: message parsing,
+Internationalization for Ream applications: request-scoped locales, ICU
+messages, locale negotiation from `Accept-Language`, and catalogs loaded from
+disk. Rosetta has no runtime npm dependency: message parsing,
 content negotiation and YAML catalog loading are implemented in the package,
 while locale data and formatting come from Node's built-in `Intl` APIs.
 
@@ -18,7 +19,8 @@ behaviour on glibc, musl/Alpine and in the browser.
 
 ## Configuration
 
-Register the provider and use the same `config/i18n.ts` shape as AdonisJS.
+Register the provider and describe the locales in `config/i18n.ts`: the default
+locale, the formatter, the fallback map and the loaders that read the catalogs.
 
 ```ts
 // reamrc.ts
@@ -50,7 +52,8 @@ registers the provider when used by Ream's package configurator.
 
 ## Translations
 
-Catalogs follow the Adonis namespace layout.
+Catalogs live in one directory per locale, and each file is a namespace: the
+key `greeting` of `en/messages.json` is translated as `messages.greeting`.
 
 ```text
 resources/lang/
@@ -109,7 +112,7 @@ instance and shares it with the view layer. Its static
 `i18n.createMessagesProvider()`; the provider does this at boot, and a request
 the middleware did not run for keeps the validator's own messages.
 
-For Ream templates, `@c9up/inker` is the Edge-equivalent integration. When
+For Ream templates, `@c9up/inker` is the template integration. When
 Inker is installed, the provider registers the template plugin from
 `@c9up/rosetta/plugins/inker`: the `i18n`, `t`, `getDefaultLocale` and
 `getSupportedLocales` globals. `t()` and `i18n` answer in the request's locale
@@ -135,8 +138,8 @@ writeFileSync(
 )
 ```
 
-The generated file augments `TranslationKeys` — the same declaration-merging
-idiom AdonisJS uses for `EventsList`:
+The generated file augments `TranslationKeys` through declaration merging, the
+way an application declares its own event list:
 
 ```ts
 declare module '@c9up/rosetta' {
@@ -158,10 +161,6 @@ i18n.t('messages.plain', { count: 1 })         // error: takes no variables
 
 Until you generate that file, `TranslationKeys` is empty and `t()` accepts
 every string exactly as before — opting in is what turns the checks on.
-
-For reference, `@adonisjs/i18n@3.0.1` declares
-`t(identifier: string, data?: Record<string, any>, fallbackMessage?: string)`,
-so none of the six lines above is an error there.
 
 ## Checking Catalogs
 
@@ -186,8 +185,8 @@ verifyCatalogs(i18nManager.getTranslations(), { referenceLocale: 'en' })
 ```
 
 `runCatalogCheck(translations, opts)` prints the report and returns an exit
-code, for a CI script. This has no `@adonisjs/i18n` equivalent — Adonis reports
-a missing translation at runtime, once the request is already being served.
+code, for a CI script: a missing translation is caught before deployment,
+instead of being reported at run time once a request is already being served.
 
 ## Reloading
 
