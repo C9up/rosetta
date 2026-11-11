@@ -111,6 +111,36 @@ export interface MissingTranslationEmitter {
 	): unknown;
 }
 
+/**
+ * Hand a missing translation to an emitter, and report a listener that fails.
+ *
+ * @internal Shared by the emitter-constructor path and the provider's bridge,
+ * so a broken listener is treated the same way whichever one forwarded it.
+ *
+ * `emit` is called INSIDE the async function, not before it. An emitter's
+ * `emit` may be async and reject when a listener fails with no error handler
+ * registered — that rejection had nowhere to go, a missing-translation report
+ * ending the process over a string that merely fell back. And a listener that
+ * throws synchronously becomes the same rejection here instead of escaping
+ * `t()`. Either way it is reported, never dropped.
+ */
+export function emitMissingTranslation(
+	emitter: MissingTranslationEmitter,
+	payload: MissingTranslationEventPayload,
+): void {
+	void (async () => emitter.emit("i18n:missing:translation", payload))().catch(
+		(error: unknown) => {
+			// `console`, not `process.stderr`: this file also runs in the
+			// browser, where a Node global would throw inside this handler.
+			console.error(
+				`[rosetta] 'i18n:missing:translation' listener failed: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		},
+	);
+}
+
 export type {
 	CurrencyFormatOptions,
 	DateTimeValue,
@@ -327,25 +357,10 @@ export class RosettaLocale extends Formatter {
 		if (this.#emitter) {
 			const resolved = this.resolveIdentifier(key);
 			if (!resolved || resolved.isFallback) {
-				// Called INSIDE the async function, not before it. An Adonis
-				// emitter's `emit` is async and rethrows when a listener fails
-				// and no error handler is registered, so a rejection here had
-				// nowhere to go — a missing-translation report ending the
-				// process over a string that merely fell back.
-				const emitter = this.#emitter;
-				void (async () =>
-					emitter.emit("i18n:missing:translation", {
-						locale: this.locale,
-						identifier: key,
-						hasFallback: resolved?.isFallback ?? false,
-					}))().catch((error: unknown) => {
-					// `console`, not `process.stderr`: this file also runs in the
-					// browser, where a Node global would throw inside this handler.
-					console.error(
-						`[rosetta] 'i18n:missing:translation' listener failed: ${
-							error instanceof Error ? error.message : String(error)
-						}`,
-					);
+				emitMissingTranslation(this.#emitter, {
+					locale: this.locale,
+					identifier: key,
+					hasFallback: resolved?.isFallback ?? false,
 				});
 			}
 		}

@@ -4,7 +4,11 @@ import DetectUserLocaleMiddleware, {
 	type RequestValidatorLike,
 } from "./middleware.js";
 import { inkerPluginI18n } from "./plugins/inker.js";
-import { Rosetta, type RosettaOptions } from "./Rosetta.js";
+import {
+	emitMissingTranslation,
+	Rosetta,
+	type RosettaOptions,
+} from "./Rosetta.js";
 import { type I18nReplLike, registerReplBindings } from "./repl.js";
 import { clearI18n, setI18n } from "./services/main.js";
 
@@ -157,16 +161,9 @@ export default class RosettaProvider {
 				emit(name: string, payload: unknown): unknown;
 			}>("emitter");
 			if (emitter) {
-				this.#unsubscribeMissing = rosetta.onMissingTranslation((payload) => {
-					const emitted = emitter.emit("i18n:missing:translation", payload);
-					if (
-						typeof emitted === "object" &&
-						emitted !== null &&
-						typeof Reflect.get(emitted, "then") === "function"
-					) {
-						void Promise.resolve(emitted).catch(() => undefined);
-					}
-				});
+				this.#unsubscribeMissing = rosetta.onMissingTranslation((payload) =>
+					emitMissingTranslation(emitter, payload),
+				);
 			}
 			const validator =
 				await this.#resolveOptional<RequestValidatorLike>("requestValidator");

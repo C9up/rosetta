@@ -396,10 +396,11 @@ describe("rosetta > RosettaProvider", () => {
 		expect(enginePlugins).toHaveLength(0);
 	});
 
-	it("swallows a rejection from an emitter that answers a promise", async () => {
+	it("handles a rejection from an emitter that answers a promise", async () => {
 		// The emitter contract allows a thenable. An unhandled rejection from a
 		// missing-translation notice would take the process down over a
-		// bookkeeping event, so the result is awaited and its failure dropped.
+		// bookkeeping event, so the result is awaited and its failure reported
+		// (see the next test) rather than left unhandled.
 		const app = buildApp(
 			{ defaultLocale: "en", messages: { en: {} } },
 			{
@@ -415,6 +416,7 @@ describe("rosetta > RosettaProvider", () => {
 		const unhandled: unknown[] = [];
 		const onUnhandled = (reason: unknown) => unhandled.push(reason);
 		process.on("unhandledRejection", onUnhandled);
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 		try {
 			const manager = await app.container.resolve<Rosetta>(Rosetta);
 			manager.locale().t("missing");
@@ -424,7 +426,44 @@ describe("rosetta > RosettaProvider", () => {
 			await new Promise((resolve) => setImmediate(resolve));
 		} finally {
 			process.off("unhandledRejection", onUnhandled);
+			errors.mockRestore();
 		}
 		expect(unhandled).toEqual([]);
+	});
+
+	it("reports a failing listener instead of dropping it, async or sync", async () => {
+		// The same listener failure the emitter-constructor path reports: a
+		// broken `i18n:missing:translation` listener must be visible, and a
+		// listener that throws synchronously must not escape `t()`.
+		for (const emit of [
+			() => Promise.reject(new Error("async listener blew up")),
+			() => {
+				throw new Error("sync listener blew up");
+			},
+		]) {
+			const app = buildApp(
+				{ defaultLocale: "en", messages: { en: {} } },
+				{ emitter: { emit } },
+			);
+			const provider = new RosettaProvider(app);
+			provider.register();
+			await provider.boot();
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				const manager = await app.container.resolve<Rosetta>(Rosetta);
+				expect(manager.locale().t("missing")).toBe(
+					"translation missing: en, missing",
+				);
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(errors).toHaveBeenCalledWith(
+					expect.stringMatching(
+						/\[rosetta\] 'i18n:missing:translation' listener failed: (async|sync) listener blew up/,
+					),
+				);
+			} finally {
+				errors.mockRestore();
+				await provider.shutdown();
+			}
+		}
 	});
 });
