@@ -306,6 +306,54 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		);
 	});
 
+	it("keeps the catalogs added with loadMessages across a reload", async () => {
+		// A successful reload rebuilt the catalogs from the constructor's
+		// messages and the loaders only: what the application registered at
+		// run time vanished without a signal.
+		let disk = { greeting: "from disk", shared: "disk" };
+		const manager = new Rosetta({
+			messages: { en: { a: "A" } },
+			loaders: [
+				{
+					async load() {
+						return { en: { ...disk } };
+					},
+				},
+			],
+		});
+		await manager.loadTranslations();
+		manager.loadMessages("en", { b: "B", shared: "runtime" });
+		manager.loadMessages("fr", { nested: { c: "C" } });
+		expect(manager.has("b", "en")).toBe(true);
+
+		disk = { greeting: "updated", shared: "disk again" };
+		await manager.reloadTranslations();
+
+		expect(manager.has("a", "en")).toBe(true);
+		expect(manager.has("b", "en")).toBe(true);
+		expect(manager.has("nested.c", "fr")).toBe(true);
+		// The loaders are re-read, and what was registered at run time stays
+		// on top of them, as it was before the reload.
+		expect(manager.locale("en").t("greeting")).toBe("updated");
+		expect(manager.locale("en").t("shared")).toBe("runtime");
+	});
+
+	it("keeps a catalog registered before boot when the loaders load", async () => {
+		const manager = new Rosetta({
+			loaders: [
+				{
+					async load() {
+						return { en: { hello: "Hello" } };
+					},
+				},
+			],
+		});
+		manager.loadMessages("en", { early: "Early" });
+		await manager.loadTranslations();
+		expect(manager.locale("en").t("early")).toBe("Early");
+		expect(manager.locale("en").t("hello")).toBe("Hello");
+	});
+
 	it("keeps the previous cache when a reload fails", async () => {
 		let fail = false;
 		const manager = new Rosetta({

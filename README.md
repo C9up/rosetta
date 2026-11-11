@@ -194,6 +194,11 @@ a missing translation at runtime, once the request is already being served.
 Translations are cached after boot. Reloading is atomic: a loader failure keeps
 the previous complete catalog active.
 
+A reload re-reads the loaders and keeps what was registered in code: the
+`messages` given to the constructor stay under the loaded catalogs, and every
+catalog added with `loadMessages(locale, messages)` stays on top of them, as it
+was before the reload.
+
 ```ts
 await i18nManager.reloadTranslations()
 ```

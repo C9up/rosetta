@@ -511,6 +511,13 @@ function interpolateValidationMessage(
 export class Rosetta {
 	#messages: Record<string, MessageCatalog> = Object.create(null);
 	#initialMessages: Record<string, MessageTree | MessageCatalog>;
+	/**
+	 * Every catalog registered with {@link loadMessages}, flattened and merged
+	 * in call order. Replayed over the loaders on each (re)load: the loaders
+	 * are re-read, and what the application registered in code stays on top
+	 * of them, as it was before.
+	 */
+	#runtimeMessages: Record<string, MessageCatalog> = Object.create(null);
 	#localeStorage = createLocaleStorage<string>();
 	#defaultLocale: string;
 	#fallbackLocale: string;
@@ -573,10 +580,11 @@ export class Rosetta {
 		}
 		this.#fallback = options.fallback;
 
-		if (options.messages) {
-			for (const [locale, catalog] of Object.entries(options.messages)) {
-				this.loadMessages(locale, catalog);
-			}
+		// The constructor's messages are the base layer, under the loaders —
+		// not the run-time layer `loadMessages` records.
+		for (const [locale, catalog] of Object.entries(this.#initialMessages)) {
+			this.#learnSpelling(locale);
+			mergeMessagesInto(this.#messages, locale, catalog);
 		}
 	}
 
@@ -592,6 +600,7 @@ export class Rosetta {
 	loadMessages(locale: string, messages: MessageTree | MessageCatalog): this {
 		this.#learnSpelling(locale);
 		mergeMessagesInto(this.#messages, locale, messages);
+		mergeMessagesInto(this.#runtimeMessages, locale, messages);
 		return this;
 	}
 
@@ -1097,6 +1106,7 @@ export class Rosetta {
 			}
 			mergeTranslationsInto(translations, loadedTranslations);
 		}
+		mergeTranslationsInto(translations, this.#runtimeMessages);
 		this.#messages = translations;
 		this.#hasCachedTranslations = true;
 	}
@@ -1117,6 +1127,7 @@ export class Rosetta {
 
 		const merged = Object.assign(emptyCatalog(), this.#messages[locale]);
 		for (const catalog of catalogs) Object.assign(merged, catalog);
+		Object.assign(merged, this.#runtimeMessages[locale]);
 		this.#messages[locale] = merged;
 	}
 
