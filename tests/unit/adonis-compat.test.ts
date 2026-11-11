@@ -925,7 +925,11 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 				return { path: to, contents: body };
 			},
 			async registerMiddleware(importPath, options) {
-				expect(options).toEqual({ tier: "router" });
+				// Pinned, because the framework's default moved: it appends now,
+				// so an unstated position would put locale detection after every
+				// middleware the application already has, and those would render
+				// with no detected locale.
+				expect(options).toEqual({ tier: "router", position: "before" });
 				middleware.push(importPath);
 			},
 		});

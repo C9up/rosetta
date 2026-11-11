@@ -15,7 +15,7 @@ interface Codemods {
 	addMiddleware?(group: string, paths: string[]): Promise<void>;
 	registerMiddleware?(
 		importPath: string,
-		options?: { tier?: "server" | "router" },
+		options?: { tier?: "server" | "router"; position?: "before" | "after" },
 	): Promise<void>;
 }
 
@@ -48,9 +48,17 @@ export async function configure(codemods: Codemods): Promise<void> {
 		"middleware/detect_user_locale_middleware.stub",
 	);
 	if (codemods.registerMiddleware) {
+		// NAMED DEVIATION — the upstream configure appends its locale detector
+		// to the router stack. Stated as `before` here, first in the stack: the
+		// shipped detection reads the Accept-Language header and nothing else,
+		// so it needs no earlier middleware, and every later one (a CSRF guard,
+		// auth, a validator) then renders its refusals in the request's locale.
+		// Stated rather than left to the default, because the framework's
+		// default moved from prepend to append. An application whose subclass
+		// reads the session or the signed-in user moves the line after them.
 		await codemods.registerMiddleware(
 			"#middleware/detect_user_locale_middleware",
-			{ tier: "router" },
+			{ tier: "router", position: "before" },
 		);
 	} else {
 		await codemods.addMiddleware?.("router", [

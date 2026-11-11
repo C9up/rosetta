@@ -48,7 +48,11 @@ export default defineConfig({
 ```
 
 The `configure` export creates this config, a locale-detection middleware and
-registers the provider when used by Ream's package configurator.
+registers the provider when used by Ream's package configurator. The middleware
+is registered FIRST in the router stack: it reads only the `Accept-Language`
+header, so it needs nothing before it, and every middleware after it renders in
+the request's locale. If you make it read the session or the signed-in user,
+move it after the middleware that provides them.
 
 ## Translations
 
