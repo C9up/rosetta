@@ -9,9 +9,7 @@
   "files": [
     "LICENSE",
     "README.md",
-    "benchmarks",
     "dist",
-    "scripts",
     "src",
     "stubs"
   ],
