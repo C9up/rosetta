@@ -337,3 +337,41 @@ describe("rosetta > IcuFormatter > a non-numeric value for a numeric argument", 
 		);
 	});
 });
+
+describe("rosetta > a translation parameter is data, never a template", () => {
+	// `t("greeting", { name: req.body.name })`: whatever the user typed must
+	// come out verbatim. It only holds because values are substituted after
+	// the message is parsed; a cache that pre-interpolated them into the
+	// source would turn every parameter into ICU syntax.
+	const values = [
+		"{n, plural, other {hacked}}",
+		"#",
+		"'",
+		"'{'",
+		"{name}",
+		"<b>bold</b>",
+		"}{",
+	];
+
+	for (const value of values) {
+		it(`renders ${JSON.stringify(value)} verbatim`, () => {
+			const r = new Rosetta({
+				defaultLocale: "en",
+				messages: {
+					en: {
+						greeting: "Hello {name}",
+						count:
+							"{n, plural, one {# item for {name}} other {# items for {name}}}",
+					},
+				},
+			});
+			expect(r.locale("en").t("greeting", { name: value })).toBe(
+				`Hello ${value}`,
+			);
+			// Inside a plural branch too, where `#` means something.
+			expect(r.locale("en").t("count", { n: 2, name: value })).toBe(
+				`2 items for ${value}`,
+			);
+		});
+	}
+});
