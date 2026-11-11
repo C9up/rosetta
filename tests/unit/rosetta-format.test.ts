@@ -99,9 +99,43 @@ describe("rosetta > Rosetta > resolveLocale (Accept-Language)", () => {
 		expect(r.resolveLocale({ header: "fr" })).toBe("fr");
 	});
 
-	it("returns the first parsed locale verbatim when no supportedLocales is configured (open mode)", () => {
-		const r = new Rosetta({ defaultLocale: "en" });
-		expect(r.resolveLocale("zh-CN")).toBe("zh-cn");
+	it("negotiates against the inferred locales when no supportedLocales is configured", () => {
+		// The client's token is never handed back as is: it is negotiated
+		// against the default locale, the fallback map and the catalogs loaded,
+		// the list supportedLocales() and getSupportedLocaleFor() use.
+		const r = new Rosetta({
+			defaultLocale: "en",
+			messages: { fr: { hello: "Bonjour" } },
+		});
+		expect(r.resolveLocale("zh-CN")).toBe("en");
+		expect(r.resolveLocale("fr")).toBe("fr");
+		expect(r.resolveLocale("de, fr;q=0.5")).toBe("fr");
+	});
+
+	it("tries every accepted locale before the default, with a configured list too", () => {
+		const r = new Rosetta({
+			defaultLocale: "en",
+			supportedLocales: ["en", "fr"],
+		});
+		expect(r.resolveLocale("de, fr;q=0.5")).toBe("fr");
+		expect(r.resolveLocale("fr-CA, en;q=0.5")).toBe("fr");
+		expect(r.resolveLocale("de")).toBe("en");
+	});
+
+	it("never resolves to an untrusted header token that Intl would throw on", () => {
+		// `Accept-Language: *` is a legitimate header value; resolved verbatim it
+		// became the locale of every formatter, and `Intl` threw on it.
+		const r = new Rosetta({
+			defaultLocale: "en",
+			messages: { en: { items: "{n, plural, one {# item} other {# items}}" } },
+		});
+		for (const header of ["*", "../../etc/passwd", "x".repeat(100)]) {
+			const locale = r.resolveLocale({ header });
+			expect(locale, header).toBe("en");
+			const scoped = r.locale(locale);
+			expect(scoped.t("items", { n: 1 })).toBe("1 item");
+			expect(scoped.formatNumber(1234.5)).toBe("1,234.5");
+		}
 	});
 
 	it("discards preferences with invalid q-values", () => {

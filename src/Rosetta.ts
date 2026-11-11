@@ -684,9 +684,19 @@ export class Rosetta {
 	}
 
 	getFallbackLocaleFor(locale: string): string {
-		const normalized = normalizeLocale(locale);
+		const closest = this.#closestFallbackFor(normalizeLocale(locale));
+		if (closest !== undefined) return this.#spell(closest);
+		return this.#spell(this.#fallbackLocale || this.#defaultLocale);
+	}
+
+	/**
+	 * The fallback a locale has of its OWN — the explicit map entry, or the
+	 * closest supported locale sharing its language — and not the global one.
+	 * Normalized, or undefined when only the global fallback applies.
+	 */
+	#closestFallbackFor(normalized: string): string | undefined {
 		const explicit = this.#fallbackLocales[normalized];
-		if (explicit) return this.#spell(explicit);
+		if (explicit) return explicit;
 		let closest:
 			| { locale: string; specificity: number; order: number }
 			| undefined;
@@ -703,8 +713,7 @@ export class Rosetta {
 				closest = { locale: candidateLocale, specificity, order };
 			}
 		}
-		if (closest) return this.#spell(closest.locale);
-		return this.#spell(this.#fallbackLocale || this.#defaultLocale);
+		return closest?.locale;
 	}
 
 	setOnMissingTranslation(
@@ -759,6 +768,14 @@ export class Rosetta {
 		return spelled;
 	}
 
+	/**
+	 * The locale to serve a client, always one this instance supports.
+	 *
+	 * Each accepted locale is tried in order (with its own fallback), then the
+	 * default locale's chain. Without a configured `supportedLocales` the
+	 * negotiation runs against the inferred list — never against the client's
+	 * own tokens, which would hand `Intl` a value such as `*` to throw on.
+	 */
 	resolveLocale(input: string | LocaleResolverInput): string {
 		const requested =
 			typeof input === "string"
@@ -767,8 +784,13 @@ export class Rosetta {
 
 		for (const candidate of requested) {
 			const normalized = normalizeLocale(candidate);
+			// The candidate and its own fallback only. The global fallback is
+			// what the request ends on when NO candidate is supported; tried
+			// per candidate, it would answer the default locale to a client
+			// whose second choice is supported (`de, fr;q=0.5`).
+			const own = this.#closestFallbackFor(normalized);
 			const supported = this.#pickFirstSupported(
-				this.#localeChainFor(normalized),
+				own === undefined ? [normalized] : [normalized, normalizeLocale(own)],
 			);
 			if (supported) {
 				return this.#spell(supported);
@@ -1168,13 +1190,21 @@ export class Rosetta {
 		return "missing";
 	}
 
+	/**
+	 * The first candidate this instance supports.
+	 *
+	 * Negotiated against the configured list, or — when none is configured —
+	 * the list {@link supportedLocales} infers (default locale, fallback map,
+	 * loaded catalogs), the same one {@link getSupportedLocaleFor} uses. Never
+	 * a candidate that list does not hold: the candidates come from a
+	 * client's `Accept-Language`, and a token such as `*` handed back as the
+	 * locale reaches `Intl`'s constructors, which throw on it.
+	 */
 	#pickFirstSupported(candidates: string[]): string | undefined {
-		if (!this.#supportedLocales) {
-			return candidates[0];
-		}
-		return candidates.find((candidate) =>
-			this.#supportedLocales?.has(candidate),
-		);
+		const supported =
+			this.#supportedLocales ??
+			new Set(this.supportedLocales().map((locale) => normalizeLocale(locale)));
+		return candidates.find((candidate) => supported.has(candidate));
 	}
 
 	/** Record a configured locale's spelling (it wins over a catalog's) and
