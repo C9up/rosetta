@@ -281,7 +281,7 @@ class MessageEvaluator {
 						return this.#formatNodes(selected, poundValue);
 					}
 					case "plural": {
-						const number = toFiniteNumber(this.#value(node.name));
+						const number = toIcuNumber(this.#value(node.name));
 						const adjusted = number - node.offset;
 						const category = getPluralRules(this.#locale, {
 							type: node.ordinal ? "ordinal" : "cardinal",
@@ -1360,16 +1360,22 @@ function normalizeNumericValue(value: unknown): number | bigint {
 	if (typeof value === "string" && value.trim()) {
 		if (/^-?\d+$/.test(value) && value.replace("-", "").length > 15)
 			return BigInt(value);
-		return toFiniteNumber(value);
+		return toIcuNumber(value);
 	}
-	return toFiniteNumber(value);
+	return toIcuNumber(value);
 }
 
-function toFiniteNumber(value: unknown): number {
-	const number = typeof value === "number" ? value : Number(value);
-	if (!Number.isFinite(number))
-		throw new TypeError(`Expected a finite ICU number, got ${String(value)}`);
-	return number;
+/**
+ * The number a plural or number argument stands for.
+ *
+ * Read the way `Intl` reads it, and never refused: a value that is not a
+ * number becomes NaN, so a plural selects `other` and the number renders as
+ * "NaN" — what the upstream formatter renders. Throwing instead turned a bad
+ * query parameter passed to `t()` into a 500 on a page that only meant to
+ * show it.
+ */
+function toIcuNumber(value: unknown): number {
+	return typeof value === "number" ? value : Number(value);
 }
 
 function stringifyValue(value: unknown): string {

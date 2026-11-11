@@ -303,8 +303,9 @@ describe("rosetta > the rest of the skeleton vocabulary", () => {
 		);
 	});
 
-	it("refuses a value that is not a number", () => {
-		expect(() => en("{v, number, ::percent}", { v: "lots" })).toThrow();
+	it("renders a value that is not a number as Intl does, NaN", () => {
+		// Not refused: a bad value passed to t() must not turn a page into a 500.
+		expect(en("{v, number, ::percent}", { v: "lots" })).toBe("NaN%");
 	});
 
 	it("formats a bigint without going through a float", () => {

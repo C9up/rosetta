@@ -307,3 +307,33 @@ describe("rosetta > IcuFormatter > upstream syntax parity", () => {
 		expect(() => icu.format("{x", "en", { x: 1 })).toThrow(SyntaxError);
 	});
 });
+
+describe("rosetta > IcuFormatter > a non-numeric value for a numeric argument", () => {
+	// `t("items", { n: req.query.n })` with `n = "abc"` threw out of t(), and a
+	// page that used to render answered 500 over a bad query parameter. Intl's
+	// own reading of such a value is NaN: the plural selects `other`, and the
+	// number renders as "NaN" — which is what is rendered here too.
+	const icu = new IcuFormatter();
+	const cases: Array<[string, Record<string, unknown>, string]> = [
+		["{n, plural, one {# item} other {# items}}", { n: "abc" }, "NaN items"],
+		["{n, plural, =0 {none} other {some}}", { n: "abc" }, "some"],
+		["{n, selectordinal, one {#st} other {#th}}", { n: "abc" }, "NaNth"],
+		["{n, number}", { n: "abc" }, "NaN"],
+		["{n, number, integer}", { n: {} }, "NaN"],
+		["{n, plural, other {# left}}", { n: Number.POSITIVE_INFINITY }, "∞ left"],
+		// A numeric string still reads as its number.
+		["{n, plural, one {# item} other {# items}}", { n: "1" }, "1 item"],
+	];
+
+	for (const [message, data, expected] of cases) {
+		it(`renders ${JSON.stringify(message)} with ${String(data.n)}`, () => {
+			expect(icu.format(message, "en", data)).toBe(expected);
+		});
+	}
+
+	it("still refuses a variable that was not provided at all", () => {
+		expect(() => icu.format("{n, plural, other {# items}}", "en", {})).toThrow(
+			/was not provided/,
+		);
+	});
+});
