@@ -68,7 +68,7 @@
     "test:types": "tsc --noEmit -p tsconfig.types.json"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.12",
+    "@biomejs/biome": "^2.6.8",
     "@c9up/inker": "^0.1.20",
     "@c9up/ream": "^0.2.25",
     "@types/node": "^22.20.1",
