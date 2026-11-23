@@ -136,7 +136,10 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 
 	it("validates and resolves defineConfig using the Adonis provider contract", async () => {
 		expect(() => defineConfig({ loaders: [] } as never)).toThrow(
-			'Missing property "formatter"',
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_CONFIG",
+				message: expect.stringContaining('Missing property "formatter"'),
+			}),
 		);
 		const config = defineConfig({
 			formatter: formatters.icu(),
@@ -487,7 +490,10 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		});
 		expect(manager.locale("fr").t("price", { n: 2 })).toContain("€");
 		expect(() => IcuFormatter.addFormatFor("number", "__proto__", {})).toThrow(
-			/Unsafe ICU custom format key/,
+			expect.objectContaining({
+				code: "E_ROSETTA_UNSAFE_KEY",
+				message: expect.stringMatching(/Unsafe ICU custom format key/),
+			}),
 		);
 	});
 
@@ -531,7 +537,12 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 				"en",
 				{ n: 1 },
 			),
-		).toThrow(/cash currency precision/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/cash currency precision/),
+			}),
+		);
 	});
 
 	it("supports per-measure-unit regardless of token order", () => {
@@ -572,7 +583,12 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		const formatter = new IcuFormatter();
 		expect(() =>
 			formatter.format("{value, date, unknown}", "en", { value: Date.now() }),
-		).toThrow(/Unsupported ICU date style/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/Unsupported ICU date style/),
+			}),
+		);
 		expect(() =>
 			formatter.format("{value, date, ::yQQQ}", "en", { value: Date.now() }),
 		).toThrow(/Unsupported ICU date skeleton field/);
@@ -585,10 +601,20 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		const formatter = new IcuFormatter();
 		expect(() =>
 			formatter.format("{n, plural, one {one}}", "en", { n: 1 }),
-		).toThrow(/other/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/other/),
+			}),
+		);
 		expect(() =>
 			formatter.format("{kind, select, yes {yes}}", "en", { kind: "yes" }),
-		).toThrow(/other/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/other/),
+			}),
+		);
 	});
 
 	it("rejects duplicate ICU branches, misplaced offsets, and malformed skeletons", () => {
@@ -597,7 +623,12 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 			formatter.format("{n, plural, one {a} one {b} other {c}}", "en", {
 				n: 1,
 			}),
-		).toThrow(/Duplicate ICU option/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/Duplicate ICU option/),
+			}),
+		);
 		expect(() =>
 			formatter.format("{n, plural, one {a} offset:1 other {c}}", "en", {
 				n: 1,
@@ -620,7 +651,12 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		}
 		expect(() =>
 			new IcuFormatter().format(message, "en", { x: "yes" }),
-		).toThrow(/nesting levels/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_ICU_LIMIT_EXCEEDED",
+				message: expect.stringMatching(/nesting levels/),
+			}),
+		);
 	});
 
 	it("rejects prototype-polluting translation keys", async () => {
@@ -630,14 +666,20 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 		);
 		await expect(
 			new FileSystemLoader({ location: root }).load("en"),
-		).rejects.toThrow(/Unsafe translation key/);
+		).rejects.toMatchObject({
+			code: "E_ROSETTA_UNSAFE_KEY",
+			message: expect.stringMatching(/Unsafe translation key/),
+		});
 		expect(({} as { polluted?: string }).polluted).toBeUndefined();
 	});
 
 	it("rejects unsafe keys from inline catalogs and custom loaders too", async () => {
 		const polluted = JSON.parse('{"__proto__":{"polluted":"yes"}}');
 		expect(() => new Rosetta({ messages: { en: polluted } })).toThrow(
-			/Unsafe translation key/,
+			expect.objectContaining({
+				code: "E_ROSETTA_UNSAFE_KEY",
+				message: expect.stringMatching(/Unsafe translation key/),
+			}),
 		);
 		const manager = new Rosetta({
 			loaders: [
@@ -648,9 +690,10 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 				},
 			],
 		});
-		await expect(manager.loadTranslations()).rejects.toThrow(
-			/Unsafe translation key/,
-		);
+		await expect(manager.loadTranslations()).rejects.toMatchObject({
+			code: "E_ROSETTA_UNSAFE_KEY",
+			message: expect.stringMatching(/Unsafe translation key/),
+		});
 	});
 
 	it("rejects ambiguous keys that collide after catalog flattening", () => {
@@ -661,7 +704,14 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 						en: { "app.title": "flat", app: { title: "nested" } },
 					},
 				}),
-		).toThrow("Duplicate flattened translation key 'app.title'");
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_DUPLICATE_KEY",
+				message: expect.stringContaining(
+					"Duplicate flattened translation key 'app.title'",
+				),
+			}),
+		);
 	});
 
 	it("keeps loadLocale atomic when a later loader returns an unsafe catalog", async () => {
@@ -682,9 +732,10 @@ describe("rosetta > AdonisJS i18n compatibility", () => {
 			],
 		});
 
-		await expect(manager.loadLocale("en")).rejects.toThrow(
-			/Unsafe translation key/,
-		);
+		await expect(manager.loadLocale("en")).rejects.toMatchObject({
+			code: "E_ROSETTA_UNSAFE_KEY",
+			message: expect.stringMatching(/Unsafe translation key/),
+		});
 		expect(manager.getTranslationsFor("en")).toEqual({ stable: "yes" });
 	});
 

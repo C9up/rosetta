@@ -115,8 +115,11 @@ describe("rosetta > RosettaProvider", () => {
 		const app = buildApp(undefined);
 		const provider = new RosettaProvider(app);
 		provider.register();
-		await expect(app.container.resolve<Rosetta>(Rosetta)).rejects.toThrow(
-			/config\/i18n/,
+		await expect(app.container.resolve<Rosetta>(Rosetta)).rejects.toMatchObject(
+			{
+				code: "E_ROSETTA_CONFIG_MISSING",
+				message: expect.stringMatching(/config\/i18n/),
+			},
 		);
 	});
 

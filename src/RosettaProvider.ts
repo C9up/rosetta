@@ -1,3 +1,4 @@
+import { E_ROSETTA_CONFIG_MISSING } from "./errors.js";
 import "./augmentations.js";
 import { FileSystemLoader } from "./loaders/FileSystemLoader.js";
 import DetectUserLocaleMiddleware, {
@@ -110,9 +111,7 @@ export default class RosettaProvider {
 				}
 			>("i18n");
 			if (!configured) {
-				throw new Error(
-					'Invalid or missing "config/i18n" export. Configure Rosetta with defineConfig().',
-				);
+				throw new E_ROSETTA_CONFIG_MISSING();
 			}
 			const config = configured.resolver
 				? await configured.resolver(this.app)

@@ -1,4 +1,10 @@
 import {
+	E_ROSETTA_CATALOG_LIMIT_EXCEEDED,
+	E_ROSETTA_DUPLICATE_KEY,
+	E_ROSETTA_INVALID_ARGUMENT,
+	E_ROSETTA_UNSAFE_KEY,
+} from "./errors.js";
+import {
 	type CurrencyFormatOptions,
 	type DateTimeValue,
 	Formatter,
@@ -257,9 +263,9 @@ export class RosettaLocale extends Formatter {
 				emitterOrManager === undefined ||
 				isEmitter(emitterOrManager)
 			) {
-				throw new TypeError(
+				throw new E_ROSETTA_INVALID_ARGUMENT([
 					"I18n(locale, emitter, manager) expects an emitter and a manager",
-				);
+				]);
 			}
 			locale = managerOrLocale;
 			emitter = localeOrEmitter;
@@ -269,9 +275,9 @@ export class RosettaLocale extends Formatter {
 				typeof localeOrEmitter !== "string" ||
 				(emitterOrManager !== undefined && !isEmitter(emitterOrManager))
 			) {
-				throw new TypeError(
+				throw new E_ROSETTA_INVALID_ARGUMENT([
 					"RosettaLocale(manager, locale, emitter?) expects a locale string",
-				);
+				]);
 			}
 			locale = localeOrEmitter;
 			emitter = emitterOrManager;
@@ -562,13 +568,17 @@ export class Rosetta {
 		let options: RosettaOptions;
 		if (managerConfig) {
 			if (!isEmitter(optionsOrEmitter)) {
-				throw new TypeError("I18nManager(emitter, config) expects an emitter");
+				throw new E_ROSETTA_INVALID_ARGUMENT([
+					"I18nManager(emitter, config) expects an emitter",
+				]);
 			}
 			this.#emitter = optionsOrEmitter;
 			options = managerConfig;
 		} else {
 			if (isEmitter(optionsOrEmitter)) {
-				throw new TypeError("I18nManager(emitter, config) expects a config");
+				throw new E_ROSETTA_INVALID_ARGUMENT([
+					"I18nManager(emitter, config) expects a config",
+				]);
 			}
 			options = optionsOrEmitter;
 		}
@@ -1490,9 +1500,10 @@ function walkFlatten(
 	state: { keys: number },
 ): void {
 	if (depth > MAX_CATALOG_DEPTH) {
-		throw new RangeError(
-			`Translation catalog exceeds ${MAX_CATALOG_DEPTH} nesting levels`,
-		);
+		throw new E_ROSETTA_CATALOG_LIMIT_EXCEEDED([
+			"catalog",
+			`${MAX_CATALOG_DEPTH} nesting levels`,
+		]);
 	}
 	if (typeof value === "string") {
 		setFlattenedMessage(out, prefix, value);
@@ -1509,9 +1520,10 @@ function walkFlatten(
 	for (const [key, child] of Object.entries(value)) {
 		state.keys += 1;
 		if (state.keys > MAX_CATALOG_KEYS) {
-			throw new RangeError(
-				`Translation catalog exceeds the ${MAX_CATALOG_KEYS} key limit`,
-			);
+			throw new E_ROSETTA_CATALOG_LIMIT_EXCEEDED([
+				"catalog",
+				`the ${MAX_CATALOG_KEYS} key limit`,
+			]);
 		}
 		assertSafeMessageKey(key);
 		const next = prefix ? `${prefix}.${key}` : key;
@@ -1525,7 +1537,7 @@ function setFlattenedMessage(
 	message: string,
 ): void {
 	if (Object.hasOwn(out, identifier)) {
-		throw new Error(`Duplicate flattened translation key '${identifier}'`);
+		throw new E_ROSETTA_DUPLICATE_KEY(["flattened translation", identifier]);
 	}
 	out[identifier] = message;
 }
@@ -1538,7 +1550,7 @@ const DANGEROUS_MESSAGE_KEYS = new Set([
 
 function assertSafeMessageKey(key: string): void {
 	if (DANGEROUS_MESSAGE_KEYS.has(key)) {
-		throw new Error(`Unsafe translation key '${key}'`);
+		throw new E_ROSETTA_UNSAFE_KEY(["translation", key]);
 	}
 }
 

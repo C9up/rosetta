@@ -29,7 +29,10 @@ describe("rosetta > argument shapes are checked, not assumed", () => {
 			/expects an emitter and a manager/,
 		);
 		expect(() => Reflect.construct(RosettaLocale, [manager, 42])).toThrow(
-			/expects a locale string/,
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ARGUMENT",
+				message: expect.stringMatching(/expects a locale string/),
+			}),
 		);
 		expect(new RosettaLocale("fr", emitter, manager).locale).toBe("fr");
 	});
@@ -37,7 +40,12 @@ describe("rosetta > argument shapes are checked, not assumed", () => {
 	it("rejects an I18nManager built without an emitter", () => {
 		expect(() =>
 			Reflect.construct(Rosetta, [{ defaultLocale: "en" }, config]),
-		).toThrow(/expects an emitter/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ARGUMENT",
+				message: expect.stringMatching(/expects an emitter/),
+			}),
+		);
 		expect(new Rosetta(emitter, config).defaultLocale).toBe("en");
 	});
 
@@ -65,7 +73,7 @@ describe("rosetta > argument shapes are checked, not assumed", () => {
 			messages: { en: { at: "{d, date, short}" } },
 		});
 		expect(() => rosetta.t("at", { d: { toJSDate: () => "2024" } })).toThrow(
-			TypeError,
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_DATE" }),
 		);
 		expect(
 			rosetta.t("at", { d: { toMillis: () => Date.UTC(2024, 0, 15, 12) } }),

@@ -1,3 +1,4 @@
+import { E_ROSETTA_UNSUPPORTED_RUNTIME } from "../errors.js";
 import type { MessageCatalog, MessageTree, RosettaLoader } from "../Rosetta.js";
 
 export interface FileSystemLoaderOptions {
@@ -8,16 +9,13 @@ export interface FileSystemLoaderOptions {
 
 export type FsLoaderOptions = FileSystemLoaderOptions;
 
-const ERROR_MESSAGE =
-	"FileSystemLoader is only available in runtimes that provide the Node.js filesystem APIs";
-
 /** Browser-safe API placeholder used by the conditional browser export. */
 export class FileSystemLoader implements RosettaLoader {
 	constructor(_options: FileSystemLoaderOptions) {
-		throw new Error(ERROR_MESSAGE);
+		throw new E_ROSETTA_UNSUPPORTED_RUNTIME();
 	}
 
 	async load(_locale: string): Promise<MessageTree | MessageCatalog | null> {
-		throw new Error(ERROR_MESSAGE);
+		throw new E_ROSETTA_UNSUPPORTED_RUNTIME();
 	}
 }

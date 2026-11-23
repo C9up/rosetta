@@ -2,6 +2,16 @@ import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	E_ROSETTA_CATALOG_LIMIT_EXCEEDED,
+	E_ROSETTA_DUPLICATE_KEY,
+	E_ROSETTA_INTERNAL,
+	E_ROSETTA_INVALID_ARGUMENT,
+	E_ROSETTA_INVALID_CATALOG,
+	E_ROSETTA_INVALID_PATH,
+	E_ROSETTA_UNSAFE_KEY,
+	E_ROSETTA_UNSAFE_PATH,
+} from "../errors.js";
 import type { MessageCatalog, MessageTree, RosettaLoader } from "../Rosetta.js";
 
 const SAFE_LOCALE_PATTERN = /^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/;
@@ -24,7 +34,9 @@ export class FileSystemLoader implements RosettaLoader {
 	constructor(options: FileSystemLoaderOptions) {
 		const location = options.rootDir ?? options.location;
 		if (!location) {
-			throw new TypeError("FileSystemLoader requires 'location' or 'rootDir'");
+			throw new E_ROSETTA_INVALID_ARGUMENT([
+				"FileSystemLoader requires 'location' or 'rootDir'",
+			]);
 		}
 		this.#rootDir =
 			location instanceof URL ? fileURLToPath(location) : location;
@@ -222,25 +234,27 @@ function validateCatalogValue(
 	state: { keys: number },
 ): asserts value is MessageTree | MessageCatalog {
 	if (depth > MAX_CATALOG_DEPTH) {
-		throw new RangeError(
-			`Translation catalog exceeds ${MAX_CATALOG_DEPTH} nesting levels`,
-		);
+		throw new E_ROSETTA_CATALOG_LIMIT_EXCEEDED([
+			"catalog",
+			`${MAX_CATALOG_DEPTH} nesting levels`,
+		]);
 	}
 	if (
 		!value ||
 		typeof value !== "object" ||
 		(depth === 0 && Array.isArray(value))
 	) {
-		throw new TypeError(
+		throw new E_ROSETTA_INVALID_CATALOG([
 			`Translation catalog '${pathLabel}' must be an object mapping or scalar value`,
-		);
+		]);
 	}
 	for (const [key, child] of Object.entries(value)) {
 		state.keys += 1;
 		if (state.keys > MAX_CATALOG_KEYS) {
-			throw new RangeError(
-				`Translation catalog exceeds the ${MAX_CATALOG_KEYS} key limit`,
-			);
+			throw new E_ROSETTA_CATALOG_LIMIT_EXCEEDED([
+				"catalog",
+				`the ${MAX_CATALOG_KEYS} key limit`,
+			]);
 		}
 		assertSafeKey(key);
 		// An array is a mapping keyed by index (`items.0`, `items.1`), checked
@@ -251,9 +265,9 @@ function validateCatalogValue(
 			!["string", "number", "boolean"].includes(typeof child) &&
 			child !== null
 		) {
-			throw new TypeError(
+			throw new E_ROSETTA_INVALID_CATALOG([
 				`Unsupported translation value at '${pathLabel}.${key}'`,
-			);
+			]);
 		}
 	}
 }
@@ -266,10 +280,12 @@ function validateCatalogValue(
 async function walkDir(dir: string): Promise<string[]> {
 	const directoryStat = await fsp.lstat(dir);
 	if (directoryStat.isSymbolicLink()) {
-		throw new Error(`Translation directory cannot be a symbolic link: ${dir}`);
+		throw new E_ROSETTA_UNSAFE_PATH([
+			`Translation directory cannot be a symbolic link: ${dir}`,
+		]);
 	}
 	if (!directoryStat.isDirectory()) {
-		throw new Error(`Translation path is not a directory: ${dir}`);
+		throw new E_ROSETTA_INVALID_PATH(["directory", dir]);
 	}
 	const out: string[] = [];
 	const entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -298,14 +314,18 @@ async function readFileNoFollow(
 ): Promise<string> {
 	const fileStat = await fsp.lstat(filePath);
 	if (fileStat.isSymbolicLink()) {
-		throw new Error(`Translation file cannot be a symbolic link: ${filePath}`);
+		throw new E_ROSETTA_UNSAFE_PATH([
+			`Translation file cannot be a symbolic link: ${filePath}`,
+		]);
 	}
 	const [canonicalRoot, canonicalFile] = await Promise.all([
 		fsp.realpath(rootDir),
 		fsp.realpath(filePath),
 	]);
 	if (!isPathInside(canonicalRoot, canonicalFile)) {
-		throw new Error(`Translation file resolves outside its root: ${filePath}`);
+		throw new E_ROSETTA_UNSAFE_PATH([
+			`Translation file resolves outside its root: ${filePath}`,
+		]);
 	}
 	const handle = await fsp.open(
 		filePath,
@@ -313,12 +333,12 @@ async function readFileNoFollow(
 	);
 	try {
 		const stat = await handle.stat();
-		if (!stat.isFile())
-			throw new Error(`Translation path is not a file: ${filePath}`);
+		if (!stat.isFile()) throw new E_ROSETTA_INVALID_PATH(["file", filePath]);
 		if (stat.size > MAX_CATALOG_BYTES) {
-			throw new RangeError(
-				`Translation file exceeds the ${MAX_CATALOG_BYTES} byte limit: ${filePath}`,
-			);
+			throw new E_ROSETTA_CATALOG_LIMIT_EXCEEDED([
+				"file",
+				`the ${MAX_CATALOG_BYTES} byte limit: ${filePath}`,
+			]);
 		}
 		return await handle.readFile("utf8");
 	} finally {
@@ -377,7 +397,7 @@ function isMessageTree(value: unknown): value is MessageTree {
 
 function assertSafeKey(key: string): void {
 	if (DANGEROUS_KEYS.has(key)) {
-		throw new Error(`Unsafe translation key '${key}'`);
+		throw new E_ROSETTA_UNSAFE_KEY(["translation", key]);
 	}
 }
 
@@ -419,35 +439,43 @@ function parseYaml(input: string): MessageTree {
 		if (rawLine === undefined) break;
 		if (!rawLine.trim() || rawLine.trim().startsWith("#")) continue;
 		if (/^\s*\t/.test(rawLine)) {
-			throw new SyntaxError(`Tabs are not valid YAML indentation on line ${i}`);
+			throw new E_ROSETTA_INVALID_CATALOG([
+				`Tabs are not valid YAML indentation on line ${i}`,
+			]);
 		}
 
 		if (["---", "..."].includes(rawLine.trim())) continue;
 		const indent = rawLine.match(/^ */)?.[0].length ?? 0;
 		if (stack.length === 1 && indent !== 0) {
-			throw new SyntaxError(
+			throw new E_ROSETTA_INVALID_CATALOG([
 				`Top-level YAML keys must not be indented on line ${i}`,
-			);
+			]);
 		}
 		if (hasValue && indent > previousIndent && !previousWasMapping) {
-			throw new SyntaxError(`Unexpected YAML indentation on line ${i}`);
+			throw new E_ROSETTA_INVALID_CATALOG([
+				`Unexpected YAML indentation on line ${i}`,
+			]);
 		}
 		const content = rawLine.slice(indent);
 		const delimiter = findYamlMappingDelimiter(content);
 		if (delimiter < 0) {
-			throw new SyntaxError(`Unsupported YAML syntax on line ${i}: ${rawLine}`);
+			throw new E_ROSETTA_INVALID_CATALOG([
+				`Unsupported YAML syntax on line ${i}: ${rawLine}`,
+			]);
 		}
 		const parsedKey = parseScalar(content.slice(0, delimiter).trim());
 		if (typeof parsedKey !== "string" || !parsedKey) {
-			throw new SyntaxError(`YAML mapping keys must be strings on line ${i}`);
+			throw new E_ROSETTA_INVALID_CATALOG([
+				`YAML mapping keys must be strings on line ${i}`,
+			]);
 		}
 		const key = parsedKey;
 		assertSafeKey(key);
 		let valueRaw = content.slice(delimiter + 1).trim();
 		if (/^(?:&|\*|!|<<\s*:|\[|\{)/.test(valueRaw)) {
-			throw new SyntaxError(
+			throw new E_ROSETTA_INVALID_CATALOG([
 				`Unsupported YAML construct for key '${key}'. Rosetta locale files accept mappings and scalar messages only.`,
-			);
+			]);
 		}
 
 		let top = stack.at(-1);
@@ -456,10 +484,11 @@ function parseYaml(input: string): MessageTree {
 			top = stack.at(-1);
 		}
 		// The stack is seeded with a root frame and only ever popped down to it.
-		if (top === undefined) throw new SyntaxError("YAML parser lost its root");
+		if (top === undefined)
+			throw new E_ROSETTA_INTERNAL(["YAML parser lost its root"]);
 		const parent = top.node;
 		if (Object.hasOwn(parent, key)) {
-			throw new SyntaxError(`Duplicate YAML key '${key}'`);
+			throw new E_ROSETTA_DUPLICATE_KEY(["YAML", key]);
 		}
 
 		// Block scalar: `|` (literal) or `>` (folded).
@@ -584,20 +613,27 @@ function foldParagraphs(blockLines: string[]): string {
 function parseScalar(value: string): string | number | boolean | null {
 	if (value.startsWith('"')) {
 		if (!value.endsWith('"'))
-			throw new SyntaxError("Unclosed double-quoted YAML scalar");
+			throw new E_ROSETTA_INVALID_CATALOG([
+				"Unclosed double-quoted YAML scalar",
+			]);
 		try {
 			const parsed: unknown = JSON.parse(value);
 			if (typeof parsed === "string") return parsed;
 			throw new SyntaxError("Not a JSON string");
 		} catch (error) {
-			throw new SyntaxError("Invalid double-quoted YAML scalar", {
-				cause: error,
-			});
+			throw new E_ROSETTA_INVALID_CATALOG(
+				["Invalid double-quoted YAML scalar"],
+				{
+					cause: error,
+				},
+			);
 		}
 	}
 	if (value.startsWith("'")) {
 		if (!value.endsWith("'"))
-			throw new SyntaxError("Unclosed single-quoted YAML scalar");
+			throw new E_ROSETTA_INVALID_CATALOG([
+				"Unclosed single-quoted YAML scalar",
+			]);
 		// Single-quoted: only '' escape (doubled apostrophe → single)
 		return value.slice(1, -1).replace(/''/g, "'");
 	}

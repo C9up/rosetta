@@ -12,6 +12,7 @@
  * the provider flow.
  */
 
+import { E_ROSETTA_NOT_BOOTED } from "../errors.js";
 import type { Rosetta } from "../Rosetta.js";
 
 let instance: Rosetta | undefined;
@@ -44,10 +45,7 @@ const i18n: Rosetta = new Proxy(target, {
 			return undefined;
 		}
 		if (!instance) {
-			throw new Error(
-				"[rosetta] Rosetta singleton accessed before RosettaProvider.boot() ran " +
-					"or `setI18n(myRosetta)` was called. Wire one of them first.",
-			);
+			throw new E_ROSETTA_NOT_BOOTED();
 		}
 		const value = Reflect.get(instance, prop, instance);
 		return typeof value === "function" ? value.bind(instance) : value;

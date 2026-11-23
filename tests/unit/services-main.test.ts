@@ -9,7 +9,12 @@ describe("rosetta > services/main singleton", () => {
 		// instance the throw won't fire, so this case runs FIRST and the
 		// setI18n tests follow.
 		expect(getI18n()).toBeUndefined();
-		expect(() => i18n.locale("en")).toThrow(/accessed before/);
+		expect(() => i18n.locale("en")).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_NOT_BOOTED",
+				message: expect.stringMatching(/accessed before/),
+			}),
+		);
 	});
 
 	it("answers then and symbols pre-boot, so a loader can inspect it", async () => {
@@ -22,9 +27,19 @@ describe("rosetta > services/main singleton", () => {
 		expect(Reflect.get(i18n, Symbol.iterator)).toBeUndefined();
 		// Converting it to a string reads `toString`, a real member: that use
 		// reports like any other.
-		expect(() => String(i18n)).toThrow(/accessed before/);
+		expect(() => String(i18n)).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_NOT_BOOTED",
+				message: expect.stringMatching(/accessed before/),
+			}),
+		);
 		// A real member read too early still reports.
-		expect(() => i18n.defaultLocale).toThrow(/accessed before/);
+		expect(() => i18n.defaultLocale).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_NOT_BOOTED",
+				message: expect.stringMatching(/accessed before/),
+			}),
+		);
 	});
 
 	it("getI18n returns undefined pre-boot", () => {

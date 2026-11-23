@@ -127,7 +127,9 @@ describe("rosetta > the classic number styles", () => {
 	it("refuses a style it does not know, rather than formatting it plainly", () => {
 		// Silently ignoring the style is how a price renders without its
 		// currency and nobody notices until a customer does.
-		expect(() => en("{v, number, nonsense}", { v: 1 })).toThrow();
+		expect(() => en("{v, number, nonsense}", { v: 1 })).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_ICU_MESSAGE" }),
+		);
 	});
 });
 
@@ -155,7 +157,10 @@ describe("rosetta > date skeletons", () => {
 		// symbols would silently produce something else entirely, so it is
 		// named and refused.
 		expect(() => en("{d, date, ::dateStyle/full}", { d: when })).toThrow(
-			/Unsupported ICU date skeleton field/,
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/Unsupported ICU date skeleton field/),
+			}),
 		);
 	});
 
@@ -175,7 +180,9 @@ describe("rosetta > date skeletons", () => {
 	});
 
 	it("refuses a date it cannot read", () => {
-		expect(() => en("{d, date, short}", { d: "not a date" })).toThrow();
+		expect(() => en("{d, date, short}", { d: "not a date" })).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_DATE" }),
+		);
 	});
 });
 
@@ -299,7 +306,10 @@ describe("rosetta > the rest of the skeleton vocabulary", () => {
 		// Ignoring an unknown stem is how a price loses its currency and nobody
 		// notices until a customer does.
 		expect(() => en("{v, number, ::invented-stem}", { v: 1 })).toThrow(
-			/Unsupported ICU number skeleton token/,
+			expect.objectContaining({
+				code: "E_ROSETTA_INVALID_ICU_MESSAGE",
+				message: expect.stringMatching(/Unsupported ICU number skeleton token/),
+			}),
 		);
 	});
 

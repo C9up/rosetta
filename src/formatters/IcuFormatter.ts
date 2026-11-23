@@ -1,3 +1,12 @@
+import {
+	E_ROSETTA_ICU_LIMIT_EXCEEDED,
+	E_ROSETTA_INTERNAL,
+	E_ROSETTA_INVALID_ARGUMENT,
+	E_ROSETTA_INVALID_DATE,
+	E_ROSETTA_INVALID_ICU_MESSAGE,
+	E_ROSETTA_MISSING_VARIABLE,
+	E_ROSETTA_UNSAFE_KEY,
+} from "../errors.js";
 import type { RosettaOptions } from "../Rosetta.js";
 import { parseIsoDateTime } from "./Formatter.js";
 import {
@@ -190,9 +199,12 @@ export class IcuFormatter implements TranslationsFormatterContract {
 			| TimeFormatOptions,
 	): void {
 		if (["__proto__", "prototype", "constructor"].includes(key)) {
-			throw new Error(`Unsafe ICU custom format key '${key}'`);
+			throw new E_ROSETTA_UNSAFE_KEY(["ICU custom format", key]);
 		}
-		if (!key) throw new TypeError("ICU custom format key cannot be empty");
+		if (!key)
+			throw new E_ROSETTA_INVALID_ARGUMENT([
+				"ICU custom format key cannot be empty",
+			]);
 		let formats = IcuFormatter.customFormats[type];
 		if (formats === undefined) {
 			const created: Record<string, never> = Object.create(null);
@@ -222,9 +234,9 @@ export class IcuFormatter implements TranslationsFormatterContract {
  */
 function getMessageAst(message: string): MessageNode[] {
 	if (message.length > MAX_MESSAGE_LENGTH) {
-		throw new RangeError(
-			`ICU message exceeds the ${MAX_MESSAGE_LENGTH} character limit`,
-		);
+		throw new E_ROSETTA_ICU_LIMIT_EXCEEDED([
+			`the ${MAX_MESSAGE_LENGTH} character limit`,
+		]);
 	}
 	const cached = messageAstCache.get(message);
 	if (cached) return cached;
@@ -277,7 +289,8 @@ class MessageEvaluator {
 						const selected =
 							node.options[String(this.#value(node.name))] ??
 							node.options.other;
-						if (!selected) throw new SyntaxError("Invalid ICU select argument");
+						if (!selected)
+							throw new E_ROSETTA_INTERNAL(["Invalid ICU select argument"]);
 						return this.#formatNodes(selected, poundValue);
 					}
 					case "plural": {
@@ -290,7 +303,8 @@ class MessageEvaluator {
 							node.options[`=${canonicalNumber(number)}`] ??
 							node.options[category] ??
 							node.options.other;
-						if (!selected) throw new SyntaxError("Invalid ICU plural argument");
+						if (!selected)
+							throw new E_ROSETTA_INTERNAL(["Invalid ICU plural argument"]);
 						return this.#formatNodes(selected, adjusted);
 					}
 					case "number":
@@ -315,16 +329,16 @@ class MessageEvaluator {
 
 	#value(identifier: string): unknown {
 		if (!Object.hasOwn(this.#data, identifier)) {
-			throw new Error(
-				`The ICU variable '${identifier}' was not provided for message '${this.#source}'`,
-			);
+			throw new E_ROSETTA_MISSING_VARIABLE([identifier, this.#source]);
 		}
 		return this.#data[identifier];
 	}
 }
 
 function assertNever(value: never): never {
-	throw new TypeError(`Unsupported ICU AST node: ${JSON.stringify(value)}`);
+	throw new E_ROSETTA_INTERNAL([
+		`Unsupported ICU AST node: ${JSON.stringify(value)}`,
+	]);
 }
 
 /** Dependency-free ICU parser. Emits the AST consumed by {@link MessageEvaluator}. */
@@ -343,9 +357,9 @@ function pushAstNode(
 ): void {
 	state.nodes += 1;
 	if (state.nodes > MAX_AST_NODES) {
-		throw new RangeError(
-			`ICU message exceeds the ${MAX_AST_NODES} AST node limit`,
-		);
+		throw new E_ROSETTA_ICU_LIMIT_EXCEEDED([
+			`the ${MAX_AST_NODES} AST node limit`,
+		]);
 	}
 	nodes.push(node);
 }
@@ -372,9 +386,9 @@ function parseSegmentToAst(
 	plural: boolean,
 ): MessageNode[] {
 	if (depth > MAX_NESTING_DEPTH) {
-		throw new RangeError(
-			`ICU message exceeds ${MAX_NESTING_DEPTH} nesting levels`,
-		);
+		throw new E_ROSETTA_ICU_LIMIT_EXCEEDED([
+			`${MAX_NESTING_DEPTH} nesting levels`,
+		]);
 	}
 	const nodes: MessageNode[] = [];
 	let text = "";
@@ -390,7 +404,8 @@ function parseSegmentToAst(
 		if (char === "{") {
 			text = flushAstText(nodes, text, state);
 			const end = findArgumentEnd(source, index, depth + 1);
-			if (end < 0) throw new SyntaxError("Unclosed ICU argument");
+			if (end < 0)
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE(["Unclosed ICU argument"]);
 			pushAstNode(
 				nodes,
 				parseArgumentToAst(source.slice(index + 1, end), depth + 1, state),
@@ -421,7 +436,7 @@ function parseArgumentToAst(
 ): MessageNode {
 	const parts = splitArgument(content, depth);
 	const name = parts[0]?.trim();
-	if (!name) throw new SyntaxError("Empty ICU argument");
+	if (!name) throw new E_ROSETTA_INVALID_ICU_MESSAGE(["Empty ICU argument"]);
 	if (parts.length === 1) return { type: "argument", name };
 
 	const kind = parts[1]?.trim();
@@ -456,7 +471,9 @@ function parseArgumentToAst(
 			validateDateStyle(style, kind);
 			return { type: "dateTime", name, style, kind };
 		default:
-			throw new SyntaxError(`Unsupported ICU argument type '${kind}'`);
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				`Unsupported ICU argument type '${kind}'`,
+			]);
 	}
 }
 
@@ -478,7 +495,9 @@ function requireOtherOption(
 	kind: string,
 ): void {
 	if (!Object.hasOwn(options, "other")) {
-		throw new SyntaxError(`ICU ${kind} arguments require an 'other' option`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`ICU ${kind} arguments require an 'other' option`,
+		]);
 	}
 }
 
@@ -567,9 +586,9 @@ function findArgumentEnd(source: string, start: number, depth: number): number {
 	// One level past what the parser accepts: anything deeper is rejected there
 	// with the same error, and the recursion stays bounded.
 	if (depth > MAX_NESTING_DEPTH + 1) {
-		throw new RangeError(
-			`ICU message exceeds ${MAX_NESTING_DEPTH} nesting levels`,
-		);
+		throw new E_ROSETTA_ICU_LIMIT_EXCEEDED([
+			`${MAX_NESTING_DEPTH} nesting levels`,
+		]);
 	}
 	const headerStart = start + 1;
 	let index = headerStart;
@@ -680,23 +699,31 @@ function parseOptions(
 	while (index < source.length) {
 		while (/\s/.test(source[index] ?? "")) index++;
 		if (plural && source.startsWith("offset:", index)) {
-			if (sawOffset) throw new SyntaxError("Duplicate ICU plural offset");
+			if (sawOffset)
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					"Duplicate ICU plural offset",
+				]);
 			if (sawOption) {
-				throw new SyntaxError("ICU plural offset must precede all options");
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					"ICU plural offset must precede all options",
+				]);
 			}
 			sawOffset = true;
 			index += 7;
 			const match = source.slice(index).match(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)/);
-			if (!match) throw new SyntaxError("Invalid ICU plural offset");
+			if (!match)
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE(["Invalid ICU plural offset"]);
 			offset = Number(match[0]);
 			if (!Number.isFinite(offset) || offset < 0) {
-				throw new SyntaxError(
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 					"ICU plural offset must be a non-negative finite number",
-				);
+				]);
 			}
 			index += match[0].length;
 			if (index < source.length && !/\s/.test(source[index] ?? "")) {
-				throw new SyntaxError("Invalid ICU plural offset delimiter");
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					"Invalid ICU plural offset delimiter",
+				]);
 			}
 			continue;
 		}
@@ -705,14 +732,17 @@ function parseOptions(
 		const key = source.slice(keyStart, index);
 		while (/\s/.test(source[index] ?? "")) index++;
 		if (!key || source[index] !== "{") {
-			throw new SyntaxError(
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 				`Invalid ICU option list near '${source.slice(index)}'`,
-			);
+			]);
 		}
 		const end = findBodyEnd(source, index, plural, depth);
-		if (end < 0) throw new SyntaxError("Unclosed ICU option body");
+		if (end < 0)
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE(["Unclosed ICU option body"]);
 		if (options.has(key)) {
-			throw new SyntaxError(`Duplicate ICU option '${key}'`);
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				`Duplicate ICU option '${key}'`,
+			]);
 		}
 		options.set(key, source.slice(index + 1, end));
 		sawOption = true;
@@ -773,12 +803,14 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 			parsed.options.style = "currency";
 			parsed.options.currency = "USD";
 		} else if (style) {
-			throw new SyntaxError(`Unsupported ICU number style '${style}'`);
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				`Unsupported ICU number style '${style}'`,
+			]);
 		}
 		return parsed;
 	}
 	if (!style.slice(2).trim()) {
-		throw new SyntaxError("Empty ICU number skeleton");
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE(["Empty ICU number skeleton"]);
 	}
 	const options = parsed.options;
 	for (const token of style.slice(2).trim().split(/\s+/)) {
@@ -892,9 +924,9 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 		} else if (token === "precision-currency-standard/w") {
 			options.trailingZeroDisplay = "stripIfInteger";
 		} else if (token.startsWith("precision-currency-cash")) {
-			throw new SyntaxError(
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 				"ICU cash currency precision is not representable by Intl",
-			);
+			]);
 		} else if (token.startsWith("precision-increment/")) {
 			applyIncrementPrecision(
 				options,
@@ -909,7 +941,9 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 		} else if (token.startsWith("integer-width/")) {
 			const width = token.slice("integer-width/".length);
 			if (!/^[*+]?(?:#+)?0+$/.test(width)) {
-				throw new SyntaxError(`Invalid ICU integer width '${width}'`);
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					`Invalid ICU integer width '${width}'`,
+				]);
 			}
 			applyIntegerWidth(parsed, width);
 		} else if (token === "integer-width-trunc") {
@@ -919,7 +953,9 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 		} else if (token.startsWith("scale/")) {
 			const scale = Number(token.slice("scale/".length));
 			if (!Number.isFinite(scale))
-				throw new SyntaxError(`Invalid ICU scale '${token}'`);
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					`Invalid ICU scale '${token}'`,
+				]);
 			parsed.scale *= scale;
 		} else if (token === "latin") {
 			options.numberingSystem = "latn";
@@ -931,12 +967,16 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 		} else if (token === "decimal-auto") {
 			parsed.decimalAlways = false;
 		} else {
-			throw new SyntaxError(`Unsupported ICU number skeleton token '${token}'`);
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				`Unsupported ICU number skeleton token '${token}'`,
+			]);
 		}
 	}
 	if (parsed.denominatorUnit) {
 		if (!options.unit) {
-			throw new SyntaxError("ICU per-measure-unit requires a numerator unit");
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				"ICU per-measure-unit requires a numerator unit",
+			]);
 		}
 		options.unit = `${options.unit}-per-${parsed.denominatorUnit}`;
 	}
@@ -946,7 +986,9 @@ function parseNumberSkeleton(style: string): ParsedNumberSkeleton {
 function assertSkeletonValue(token: string, prefix: string): void {
 	const value = token.slice(prefix.length);
 	if (!value || !/^[A-Za-z0-9-]+$/.test(value)) {
-		throw new SyntaxError(`Invalid ICU number skeleton token '${token}'`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Invalid ICU number skeleton token '${token}'`,
+		]);
 	}
 }
 
@@ -972,7 +1014,9 @@ function applyScientificNotation(
 		} else if (option === "sign-auto") {
 			parsed.exponentSignDisplay = "auto";
 		} else {
-			throw new SyntaxError(`Unsupported ICU scientific option '${option}'`);
+			throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+				`Unsupported ICU scientific option '${option}'`,
+			]);
 		}
 	}
 }
@@ -1045,15 +1089,17 @@ function applyIncrementPrecision(
 ): void {
 	const increment = Number(raw);
 	if (!Number.isFinite(increment) || increment <= 0) {
-		throw new SyntaxError(`Invalid ICU rounding increment '${raw}'`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Invalid ICU rounding increment '${raw}'`,
+		]);
 	}
 	const [, fraction] = raw.split(".");
 	const fractionDigits = fraction?.length ?? 0;
 	const integerIncrement = Math.round(increment * 10 ** fractionDigits);
 	if (!isSupportedIncrement(integerIncrement)) {
-		throw new SyntaxError(
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 			`ICU rounding increment '${raw}' is not supported by Intl`,
-		);
+		]);
 	}
 	options.minimumFractionDigits = fractionDigits;
 	options.maximumFractionDigits = fractionDigits;
@@ -1078,7 +1124,9 @@ function applyRoundingMode(
 	};
 	const resolved = modes[mode];
 	if (!resolved)
-		throw new SyntaxError(`Unsupported ICU rounding mode '${mode}'`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Unsupported ICU rounding mode '${mode}'`,
+		]);
 	options.roundingMode = resolved;
 }
 
@@ -1225,16 +1273,24 @@ function parseDateStyle(
 		return type === "time" ? { timeStyle: style } : { dateStyle: style };
 	}
 	if (!style.startsWith("::")) {
-		throw new SyntaxError(`Unsupported ICU ${type} style '${style}'`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Unsupported ICU ${type} style '${style}'`,
+		]);
 	}
 	const skeleton = style.slice(2).trim();
-	if (!skeleton) throw new SyntaxError(`Empty ICU ${type} skeleton`);
+	if (!skeleton)
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([`Empty ICU ${type} skeleton`]);
 	if (/[^A-Za-z\s:.,/-]/.test(skeleton)) {
-		throw new SyntaxError(`Invalid ICU ${type} skeleton '${style}'`);
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Invalid ICU ${type} skeleton '${style}'`,
+		]);
 	}
 	const options: Intl.DateTimeFormatOptions = {};
 	const fields = skeleton.match(/([A-Za-z])\1*/g);
-	if (!fields) throw new SyntaxError(`Invalid ICU ${type} skeleton '${style}'`);
+	if (!fields)
+		throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+			`Invalid ICU ${type} skeleton '${style}'`,
+		]);
 	for (const field of fields) {
 		const symbol = field[0];
 		const length = field.length;
@@ -1256,9 +1312,9 @@ function parseDateStyle(
 			case "e":
 			case "c":
 				if (length <= 3) {
-					throw new SyntaxError(
+					throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 						`ICU date skeleton field '${field}' is not supported by Intl`,
-					);
+					]);
 				}
 				options.weekday =
 					length === 4 ? "long" : length >= 5 ? "narrow" : "short";
@@ -1296,9 +1352,9 @@ function parseDateStyle(
 				break;
 			case "S":
 				if (length > 3) {
-					throw new SyntaxError(
+					throw new E_ROSETTA_INVALID_ICU_MESSAGE([
 						"Intl supports at most 3 fractional second digits",
-					);
+					]);
 				}
 				options.fractionalSecondDigits = length as 1 | 2 | 3;
 				break;
@@ -1314,7 +1370,9 @@ function parseDateStyle(
 				options.timeZoneName = length >= 4 ? "longOffset" : "shortOffset";
 				break;
 			default:
-				throw new SyntaxError(`Unsupported ICU date skeleton field '${field}'`);
+				throw new E_ROSETTA_INVALID_ICU_MESSAGE([
+					`Unsupported ICU date skeleton field '${field}'`,
+				]);
 		}
 	}
 	return options;
@@ -1335,7 +1393,7 @@ function normalizeDate(value: unknown): Date | number {
 	if (typeof value === "string") {
 		const date = parseIsoDateTime(value);
 		if (Number.isNaN(date.getTime()))
-			throw new RangeError(`Invalid ISO date '${value}'`);
+			throw new E_ROSETTA_INVALID_DATE([`Invalid ISO date '${value}'`]);
 		return date;
 	}
 	if (value && typeof value === "object") {
@@ -1350,9 +1408,9 @@ function normalizeDate(value: unknown): Date | number {
 			if (typeof millis === "number") return millis;
 		}
 	}
-	throw new TypeError(
+	throw new E_ROSETTA_INVALID_DATE([
 		"ICU date/time values must be Date, timestamp, ISO string, or Luxon-like DateTime",
-	);
+	]);
 }
 
 function normalizeNumericValue(value: unknown): number | bigint {

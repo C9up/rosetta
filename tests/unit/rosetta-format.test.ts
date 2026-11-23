@@ -303,8 +303,12 @@ describe("rosetta > IcuFormatter > upstream syntax parity", () => {
 	it("still rejects a body that never closes", () => {
 		expect(() =>
 			icu.format("{n, plural, other {a } b}}", "en", { n: 1 }),
-		).toThrow(SyntaxError);
-		expect(() => icu.format("{x", "en", { x: 1 })).toThrow(SyntaxError);
+		).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_ICU_MESSAGE" }),
+		);
+		expect(() => icu.format("{x", "en", { x: 1 })).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_ICU_MESSAGE" }),
+		);
 	});
 });
 

@@ -11,6 +11,7 @@
  * runtime, once the request is already being served.
  */
 
+import { E_ROSETTA_CATALOG_MISMATCH, E_ROSETTA_INTERNAL } from "./errors.js";
 import {
 	extractMessageParams,
 	type MessageParam,
@@ -72,9 +73,9 @@ function levenshtein(a: string, b: string): number {
 function cell(row: number[], index: number): number {
 	const value = row[index];
 	if (value === undefined) {
-		throw new RangeError(
+		throw new E_ROSETTA_INTERNAL([
 			`distance: column ${index} was read before it was written`,
-		);
+		]);
 	}
 	return value;
 }
@@ -260,7 +261,7 @@ export function verifyCatalogs(
 	const findings = checkCatalogs(translations, opts);
 	if (findings.length > 0) {
 		const report = formatCatalogFindings(findings);
-		if (opts.mode === "throw") throw new Error(report);
+		if (opts.mode === "throw") throw new E_ROSETTA_CATALOG_MISMATCH([report]);
 		console.warn(report);
 	}
 	return findings;

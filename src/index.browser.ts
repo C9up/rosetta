@@ -9,6 +9,7 @@ export {
 	FileSystemLoader as FsLoader,
 } from "./loaders/BrowserFileSystemLoader.js";
 
+import { E_ROSETTA_INVALID_CONFIG } from "./errors.js";
 import {
 	FileSystemLoader,
 	type FileSystemLoaderOptions,
@@ -49,6 +50,7 @@ import {
 import type { I18nManagerConfig, LoaderFactory } from "./Rosetta.js";
 
 export { configure } from "./configure.js";
+export * as errors from "./errors.js";
 export type { I18nHttpContext, RequestValidatorLike } from "./middleware.js";
 export type {
 	BaseI18nConfig,
@@ -135,9 +137,7 @@ export function defineConfig(
 	ConfigValue<LoaderFactory>
 > {
 	if (!config.formatter) {
-		throw new Error(
-			'Cannot configure i18n manager. Missing property "formatter"',
-		);
+		throw new E_ROSETTA_INVALID_CONFIG();
 	}
 
 	const { defaultLocale = "en", formatter, loaders = [], ...rest } = config;

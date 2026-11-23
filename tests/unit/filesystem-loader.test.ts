@@ -2,8 +2,23 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FileSystemLoader as BrowserFileSystemLoader } from "../../src/loaders/BrowserFileSystemLoader.js";
 import { FileSystemLoader } from "../../src/loaders/FileSystemLoader.js";
 import { type MessageTree, Rosetta } from "../../src/Rosetta.js";
+
+describe("rosetta > FileSystemLoader > construction", () => {
+	it("refuses to start without a location", () => {
+		expect(() => new FileSystemLoader({})).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_INVALID_ARGUMENT" }),
+		);
+	});
+
+	it("the browser build refuses to read the filesystem", () => {
+		expect(() => new BrowserFileSystemLoader({ rootDir: "/" })).toThrow(
+			expect.objectContaining({ code: "E_ROSETTA_UNSUPPORTED_RUNTIME" }),
+		);
+	});
+});
 
 describe("rosetta > FileSystemLoader > security", () => {
 	let dir: string;
@@ -77,7 +92,10 @@ describe("rosetta > FileSystemLoader > security", () => {
 			await fsp.symlink(outside, path.join(dir, "en"), "dir");
 			await expect(
 				new FileSystemLoader({ rootDir: dir }).load("en"),
-			).rejects.toThrow(/symbolic link/);
+			).rejects.toMatchObject({
+				code: "E_ROSETTA_UNSAFE_PATH",
+				message: expect.stringMatching(/symbolic link/),
+			});
 		} finally {
 			await fsp.rm(outside, { recursive: true, force: true });
 		}
@@ -177,7 +195,10 @@ describe("rosetta > FileSystemLoader > extension fallback", () => {
 			'{"items": ["ok", [{"nested": {"deeper": ["fine", null]}}]]}',
 		);
 		const loader = new FileSystemLoader({ rootDir: dir });
-		await expect(loader.load("fr")).rejects.toThrow(/constructor/);
+		await expect(loader.load("fr")).rejects.toMatchObject({
+			code: "E_ROSETTA_UNSAFE_KEY",
+			message: expect.stringMatching(/constructor/),
+		});
 		await expect(loader.load("de")).resolves.toEqual({
 			items: ["ok", [{ nested: { deeper: ["fine", null] } }]],
 		});
@@ -189,7 +210,10 @@ describe("rosetta > FileSystemLoader > extension fallback", () => {
 		await fsp.writeFile(path.join(dir, "en.json"), JSON.stringify({ deep }));
 		await expect(
 			new FileSystemLoader({ rootDir: dir }).load("en"),
-		).rejects.toThrow(/nesting levels/);
+		).rejects.toMatchObject({
+			code: "E_ROSETTA_CATALOG_LIMIT_EXCEEDED",
+			message: expect.stringMatching(/nesting levels/),
+		});
 	});
 });
 
@@ -316,12 +340,14 @@ describe("rosetta > FileSystemLoader > YAML parser", () => {
 	});
 
 	it("fails closed on unsupported YAML instead of partially loading it", async () => {
-		await expect(loadYaml("items: [one, two]")).rejects.toThrow(
-			/Unsupported YAML/,
-		);
-		await expect(loadYaml("- sequence item")).rejects.toThrow(
-			/Unsupported YAML/,
-		);
+		await expect(loadYaml("items: [one, two]")).rejects.toMatchObject({
+			code: "E_ROSETTA_INVALID_CATALOG",
+			message: expect.stringMatching(/Unsupported YAML/),
+		});
+		await expect(loadYaml("- sequence item")).rejects.toMatchObject({
+			code: "E_ROSETTA_INVALID_CATALOG",
+			message: expect.stringMatching(/Unsupported YAML/),
+		});
 	});
 
 	it("ignores blank lines and full-line comments", async () => {
@@ -359,11 +385,15 @@ describe("rosetta > FileSystemLoader > YAML parser", () => {
 	});
 
 	it("rejects duplicate keys and unexpected indentation", async () => {
-		await expect(loadYaml("name: first\nname: second")).rejects.toThrow(
-			/Duplicate YAML key/,
-		);
-		await expect(loadYaml("name: first\n  nested: invalid")).rejects.toThrow(
-			/indent/i,
-		);
+		await expect(loadYaml("name: first\nname: second")).rejects.toMatchObject({
+			code: "E_ROSETTA_DUPLICATE_KEY",
+			message: expect.stringMatching(/Duplicate YAML key/),
+		});
+		await expect(
+			loadYaml("name: first\n  nested: invalid"),
+		).rejects.toMatchObject({
+			code: "E_ROSETTA_INVALID_CATALOG",
+			message: expect.stringMatching(/indent/i),
+		});
 	});
 });

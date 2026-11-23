@@ -87,7 +87,12 @@ describe("checkCatalogs", () => {
 		const i18n = new Rosetta({ defaultLocale: "en" }).locale("fr");
 		expect(() =>
 			i18n.formatRawMessage(translations.fr.items, { count: 2 }),
-		).toThrow(/'n' was not provided/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_MISSING_VARIABLE",
+				message: expect.stringMatching(/'n' was not provided/),
+			}),
+		);
 	});
 
 	it("flags a variable whose type changed across locales", () => {
@@ -157,7 +162,12 @@ describe("verifyCatalogs / runCatalogCheck", () => {
 
 		expect(() =>
 			verifyCatalogs(drifted, { referenceLocale: "en", mode: "throw" }),
-		).toThrow(/catalog issue/);
+		).toThrow(
+			expect.objectContaining({
+				code: "E_ROSETTA_CATALOG_MISMATCH",
+				message: expect.stringMatching(/catalog issue/),
+			}),
+		);
 	});
 
 	it("stays quiet when the catalogs agree", () => {
