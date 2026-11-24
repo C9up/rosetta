@@ -10,8 +10,13 @@ function requireFile(path) {
   if (statSync(url).size === 0) throw new Error(`${TAG} empty required file: ${path}`)
 }
 
-if (Object.keys(packageJson.dependencies ?? {}).length !== 0) {
-  throw new Error(`${TAG} runtime dependencies are forbidden`)
+// One runtime dependency is allowed: @c9up/flare, the exception base every
+// package's errors are declared on — itself dependency-free and isomorphic.
+const ALLOWED_DEPENDENCIES = new Set(['@c9up/flare'])
+for (const name of Object.keys(packageJson.dependencies ?? {})) {
+  if (!ALLOWED_DEPENDENCIES.has(name)) {
+    throw new Error(`${TAG} runtime dependencies are forbidden: ${name}`)
+  }
 }
 // A peer is allowed only if it is optional AND nothing imports it at runtime.
 // `augmentations.ts` needs `@c9up/ream` to declare what `container.make()`
@@ -75,4 +80,4 @@ for (const match of readme.matchAll(/@c9up\/rosetta(\/[\w./-]*[\w-])?/g)) {
   }
 }
 
-console.log(`${TAG} publish shape verified (zero runtime dependencies)`)
+console.log(`${TAG} publish shape verified (no runtime dependency but @c9up/flare)`)
